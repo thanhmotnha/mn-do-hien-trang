@@ -1,12 +1,12 @@
 {
   "name": "mn-do-hien-trang",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Đo hiện trạng — trang điện thoại cho thợ đo của Một Nhà; máy vẽ (tiện ích mn-chenfeng) đọc phòng đã đo bằng mã kết nối.",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js",
-    "e2e": "node --disable-warning=ExperimentalWarning test/e2e/do.e2e.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js test/vong-soat.test.js",
+    "e2e": "node --disable-warning=ExperimentalWarning test/e2e/do.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/vong-soat.e2e.js"
   }
 }

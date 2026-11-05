@@ -16,18 +16,31 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/app:ro -v "$RUNNER_TEMP/mn-chenfeng":/mncf:ro -w /app \
             -e MNCF_PHONG=/mncf/src/mncf-phong.js node:22-alpine \
-            node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js
+            node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js test/vong-soat.test.js
       - name: Ghi .env
+        # bí mật đi qua env: (KHÔNG dán ${{ … }} vào kịch bản — bash sẽ bung $, `…`, $(…) trong mật khẩu). Mật khẩu quản lý đầu
+        # không ghi vào .env (compose nội suy $ trong env_file): nó đi thẳng qua biến môi trường của bước "Dựng + chạy".
+        env:
+          MNDO_PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://do.motnha.vn' }}
+          MNDO_QL_TEN: ${{ secrets.QUAN_LY_TEN || 'quanly' }}
+          MNDO_QL_MK: ${{ secrets.QUAN_LY_MAT_KHAU_DAU }}
+          MNDO_ANH_PHONG_MB: ${{ vars.ANH_PHONG_MB || '500' }}
+          MNDO_ANH_TONG_GB: ${{ vars.ANH_TONG_GB || '20' }}
+          MNDO_DIA_TRONG_MIN_GB: ${{ vars.DIA_TRONG_MIN_GB || '2' }}
         run: |
+          # ghi-env:bat-dau
           umask 077
-          cat > .env <<EOT
-          PUBLIC_URL=${{ vars.PUBLIC_URL || 'https://do.motnha.vn' }}
-          QUAN_LY_TEN=${{ secrets.QUAN_LY_TEN || 'quanly' }}
-          QUAN_LY_MAT_KHAU_DAU=${{ secrets.QUAN_LY_MAT_KHAU_DAU }}
-          ANH_MAX_MB=4
-          EOT
-          sed -i 's/^[[:space:]]*//' .env
+          case "$MNDO_PUBLIC_URL" in https://*|http://localhost*) ;; *) echo "::error::PUBLIC_URL phải bắt đầu bằng https://"; exit 1;; esac
+          printf '%s' "$MNDO_PUBLIC_URL" | grep -Eq '^https?://[A-Za-z0-9.:-]+$' || { echo "::error::PUBLIC_URL chỉ gồm tên miền (không đường dẫn, không ký tự lạ)"; exit 1; }
+          printf '%s' "$MNDO_QL_TEN" | grep -Eq '^[a-z0-9._-]{3,32}$' || { echo "::error::QUAN_LY_TEN: 3 … 32 ký tự chữ thường không dấu, số, . _ -"; exit 1; }
+          if [ "$(printf '%s' "$MNDO_QL_MK" | tr -d '\r' | wc -l)" -ne 0 ] || [ "$(printf '%s' "$MNDO_QL_MK" | tr -d '\r' | wc -c)" -ne "$(printf '%s' "$MNDO_QL_MK" | wc -c)" ]; then echo "::error::QUAN_LY_MAT_KHAU_DAU không được có xuống dòng"; exit 1; fi
+          for v in "${MNDO_ANH_PHONG_MB:-500}" "${MNDO_ANH_TONG_GB:-20}" "${MNDO_DIA_TRONG_MIN_GB:-2}"; do printf '%s' "$v" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "::error::ANH_PHONG_MB / ANH_TONG_GB / DIA_TRONG_MIN_GB phải là số"; exit 1; }; done
+          rm -f .env
+          printf 'PUBLIC_URL=%s\nQUAN_LY_TEN=%s\nANH_MAX_MB=4\nANH_PHONG_MB=%s\nANH_TONG_GB=%s\nDIA_TRONG_MIN_GB=%s\n' "$MNDO_PUBLIC_URL" "$MNDO_QL_TEN" "${MNDO_ANH_PHONG_MB:-500}" "${MNDO_ANH_TONG_GB:-20}" "${MNDO_DIA_TRONG_MIN_GB:-2}" > .env
+          # ghi-env:het
       - name: Dựng + chạy (thử lại 3 lần như ERP)
+        env:
+          QUAN_LY_MAT_KHAU_DAU: ${{ secrets.QUAN_LY_MAT_KHAU_DAU }}      # compose chuyển nguyên chữ vào container (dòng "- QUAN_LY_MAT_KHAU_DAU")
         run: |
           set -e
           for i in 1 2 3; do docker compose -p mndo build app && break; [ "$i" -eq 3 ] && exit 1; sleep 20; done

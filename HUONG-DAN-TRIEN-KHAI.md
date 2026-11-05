@@ -10,7 +10,7 @@
 | Dữ liệu | volume `mndo_data` (SQLite + ảnh + sao lưu) | `postgres_data`, `uploads_data` |
 | Runner GitHub | runner riêng, nhãn `mndo` | runner của kho ERP |
 
-Không có mật khẩu / mã nào trong mã nguồn: tất cả nằm trong GitHub Secrets → tệp `.env` trên máy chủ (quyền 600).
+Không có mật khẩu / mã nào trong mã nguồn: tất cả nằm trong GitHub Secrets. Workflow ghi `.env` (quyền 600) chỉ gồm địa chỉ + tên quản lý; mật khẩu quản lý đầu đi thẳng vào container qua biến môi trường (không qua `.env`, không qua kịch bản — ký tự `$`, `` ` ``, `#`, `"`, `'` trong mật khẩu giữ nguyên chữ).
 
 ## 1. Tạo kho riêng tư
 
@@ -37,8 +37,9 @@ Runner của ERP gắn với kho ERP, kho mới cần runner riêng.
 Kho mới → **Settings → Secrets and variables → Actions**:
 
 - Tab **Secrets** → New repository secret:
-  - `QUAN_LY_MAT_KHAU_DAU` — mật khẩu đầu của quản lý, ≥ 12 ký tự, anh tự đặt và giữ riêng. Chỉ dùng ở lần chạy đầu tiên.
-  - (tuỳ chọn) `QUAN_LY_TEN` — tên đăng nhập quản lý (mặc định `quanly`).
+  - `QUAN_LY_MAT_KHAU_DAU` — mật khẩu đầu của quản lý, ≥ 12 ký tự, anh tự đặt và giữ riêng. Chỉ dùng ở lần chạy đầu tiên. Ký tự nào cũng được, trừ xuống dòng (workflow dừng và báo).
+  - (nên đặt) `QUAN_LY_TEN` — tên đăng nhập quản lý, 3 … 32 ký tự chữ thường không dấu / số / `. _ -`. Mặc định `quanly` ai cũng đoán được: người lạ gõ sai 5 lần chỉ khoá được máy của họ (khoá theo tên + máy), nhưng tên riêng thì họ còn không biết mà đoán.
+  - (tuỳ chọn, Variables) trần ảnh `ANH_PHONG_MB` (500 / phòng), `ANH_TONG_GB` (20), `DIA_TRONG_MIN_GB` (2) — đĩa dùng chung với ERP; vượt trần thì điện thoại báo "đầy — báo quản lý", quản lý xem dung lượng ở trang Tài khoản thợ.
 - Tab **Variables**:
   - `PUBLIC_URL` = `https://do.motnha.vn` (địa chỉ ngoài; chuỗi kết nối máy vẽ lấy từ đây).
   - (tuỳ chọn) `MNCF_KHO` — địa chỉ kho mn-chenfeng để chạy phép thử hợp đồng (mặc định `https://github.com/thanhmotnha/mn-chenfeng.git`).
@@ -51,7 +52,7 @@ Kiểm trên máy chủ:
 
 ```bash
 docker ps --filter name=mndo          # mndo-app  … (healthy)
-curl http://127.0.0.1:3100/api/suc-khoe   # {"ok":true,"ban":"0.1.0"}
+curl http://127.0.0.1:3100/api/suc-khoe   # {"ok":true,"ban":"0.1.1"}
 ```
 
 Lưu ý: workflow của ERP có bước dọn Docker (`docker container prune`, `docker image prune -af --filter until=72h`). `mndo-app` đang chạy thì không bị đụng; nếu nó đang **dừng** lúc ERP triển khai thì container bị xoá (dữ liệu trong volume `mndo_data` vẫn còn) — chỉ cần chạy lại workflow của kho này.

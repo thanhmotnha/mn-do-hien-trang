@@ -43,7 +43,7 @@ test('bat_doi_mk → 403 DOI_MK; khoá thợ → phiên chết ngay; quản lý 
   await Q.goi('POST', `/api/quan-ly/tai-khoan/${r.j.id}/khoa`);
   assert.equal((await k.goi('GET', '/api/cong-trinh')).st, 401, 'khoá = phiên chết ngay');
   const l = await M.khach().goi('POST', '/api/dang-nhap', { json: { ten: 'tho2', mat_khau: 'Mat-khau-tho2-moi' } });
-  assert.equal(l.st, 403);
+  assert.equal(l.st, 401, 'tài khoản khoá: cùng câu với sai mật khẩu (vòng soát 0.1.0 — 403 là lộ mật khẩu đúng)');
   const toi = (await Q.goi('GET', '/api/quan-ly/tai-khoan')).j.tai_khoan.find(t => t.ten === 'quanly');
   assert.equal((await Q.goi('POST', `/api/quan-ly/tai-khoan/${toi.id}/khoa`)).st, 403);
   assert.ok(!JSON.stringify((await Q.goi('GET', '/api/quan-ly/tai-khoan')).j).includes('scrypt'), 'danh sách không trả băm');

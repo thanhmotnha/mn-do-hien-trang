@@ -8,13 +8,15 @@
   const $ = (s, r) => (r || document).querySelector(s), $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const esc = v => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const g = v => String(G.rn(v, 1)).replace('.', ',');
-  const soDoc = v => { if (v === null || v === undefined) return null; const s = String(v).trim().replace(',', '.'); if (!s) return null; const x = Number(s); return isFinite(x) ? x : null; };
+  // đọc số thợ gõ: "3 650", "3650mm", "3.600" (chấm nhóm nghìn) đều là 3650 / 3600; chữ lạ, số âm, số quá lớn → { sai } (không lặng lẽ thành ô trống)
+  const docO = (v, min = 0) => { const r = G.docSo(v); if (r.sai || r.v === null) return r; if (r.v < min) return { v: null, sai: 'số âm' }; if (r.v > G.SO_MAX) return { v: null, sai: `quá lớn (tối đa ${G.SO_MAX})` }; return r; };
+  const soDoc = v => docO(v).v;
   const app = $('#app'), lop = $('#lop'), thanh = $('#thanh');
   const gioPhut = ms => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   const homNay = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const ngauNhien = n => { const k = 'abcdefghijklmnopqrstuvwxyz0123456789', b = new Uint8Array(n); crypto.getRandomValues(b); let s = ''; for (let i = 0; i < n; i++) s += k[b[i] % 36]; return s; };
   const idMoi = dau => dau + ngauNhien(20);
-  const S = { toi: null, rec: null, mo: 0, hen: 0, gui_luc: 0, dang_gui: null, xoa_cho: {} };
+  const S = { toi: null, rec: null, mo: 0, hen: 0, gui_luc: 0, dang_gui: null, xoa_cho: {}, sai: {}, may: '', can_dn: false, ls: false, bo_pop: false };
 
   /* ================= IndexedDB ================= */
   const DB = {
@@ -33,6 +35,10 @@
     put: (s, v) => DB.lam(s, 'readwrite', x => x.put(v)),
     del: (s, k) => DB.lam(s, 'readwrite', x => x.delete(k)),
     all: s => DB.lam(s, 'readonly', x => x.getAll()),
+    /** Đọc – sửa – ghi trong MỘT giao dịch: lần gửi nền không ghi đè bản thợ vừa lưu (đọc bản cũ trước, ghi sau lần lưu = mất nét / số). */
+    sua(store, k, fn) {
+      return new Promise((ok, hong) => { const t = DB.db.transaction(store, 'readwrite'), x = t.objectStore(store); let kq; const r = x.get(k); r.onsuccess = () => { const v = r.result; if (v === undefined) return; const m = fn(v); if (m) { kq = m; x.put(m); } }; t.oncomplete = () => ok(kq); t.onerror = () => hong(t.error); t.onabort = () => hong(t.error); });
+    },
     async xoaHet() { for (const s of ['meta', 'ct', 'phong', 'anh', 'hang']) await DB.lam(s, 'readwrite', x => x.clear()); },
   };
 
@@ -46,10 +52,17 @@
     if (r.status === 401 && path !== '/api/dang-nhap' && path !== '/api/toi') canDangNhap();
     return { st: r.status, ok: r.ok, j };
   }
-  function canDangNhap() { if (!S.toi) return; S.toi = null; veDangNhap('Phiên đăng nhập đã hết — đăng nhập lại. Nháp trong máy vẫn giữ nguyên.'); }
+  const BAO_HET_PHIEN = 'Phiên đăng nhập đã hết — đăng nhập lại. Nháp trong máy vẫn giữ nguyên.';
+  /** Phiên hết giữa chừng: đang ở trong phòng / đang mở tấm hay màn kẻ thì KHÔNG cắt ngang (mất nét, mất số đang gõ) — chỉ báo ở thanh; đóng tấm / bấm thanh mới sang đăng nhập. */
+  function canDangNhap() {
+    if (!S.toi) return; S.toi = null;
+    if (/^#\/ph\//.test(location.hash) || lop.innerHTML) { S.can_dn = true; capThanh(); return; }
+    veDangNhap(BAO_HET_PHIEN);
+  }
+  function dangNhapLai() { S.can_dn = false; Promise.resolve(luuNgay()).catch(() => null).then(() => veDangNhap(BAO_HET_PHIEN)); }
 
   /* ================= hàng đợi gửi ================= */
-  const TH = { ct: 0, phong: 1, anh: 2 };
+  const TH = { ct: 0, phong: 1, anh: 2, xoa: 3 };
   async function xepHang(loai, id) { await DB.put('hang', { k: loai + ':' + id, loai, id, th: TH[loai], lan: 0, cho_den: 0, dung: '' }); capThanh(); henChay(200); }
   let henC = 0; function henChay(ms) { clearTimeout(henC); henC = setTimeout(() => chayHang().catch(e => console.error(e)), ms); }
   const LUI = [5000, 15000, 60000, 300000];
@@ -93,36 +106,55 @@
     if (j.loai === 'phong') {
       const p = await DB.get('phong', j.id); if (!p) return 'xong';
       const dem = p.dem;
-      const r = await api('PUT', '/api/phong/' + p.id, { ct: p.ct, ten: p.ten, xong: !!p.xong, ghi_chu: p.ghi_chu || '', phong: p.phong, anh: p.anh, rev: p.rev || 0, ghi_de: !!p.ghi_de });
+      // số ngoài khoảng máy chủ nhận → gửi là ô trống (máy chủ từ chối CẢ phòng vì một ô); điện thoại vẫn giữ + báo đỏ số đó
+      const r = await api('PUT', '/api/phong/' + p.id, { ct: p.ct, ten: p.ten, xong: !!p.xong, ghi_chu: p.ghi_chu || '', phong: G.boSoSai(p.phong), anh: p.anh, rev: p.rev || 0, ghi_de: !!p.ghi_de, may: S.may || undefined });
       if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
-      const moi = await DB.get('phong', j.id) || p;
+      let moi = await DB.get('phong', j.id);
+      if (!moi) {      // thợ xoá phòng trong lúc lần gửi này đang đi: không hồi sinh; máy chủ đã nhận thì xoá luôn ở đó
+        if (r.ok) await DB.put('hang', { k: 'xoa:' + p.id, loai: 'xoa', id: p.id, th: 3, lan: 0, cho_den: 0, dung: '' });
+        return 'xong';
+      }
       if (r.ok) {
-        moi.rev = r.j.rev; moi.ghi_de = false; moi.anh_co = r.j.anh_co; moi.sua_luc = r.j.sua_luc; delete moi.xung_dot; delete moi.loi_gui;
-        await DB.put('phong', moi);
+        moi = await DB.sua('phong', j.id, m => { m.rev = r.j.rev; m.ghi_de = false; m.anh_co = r.j.anh_co; m.sua_luc = r.j.sua_luc; delete m.xung_dot; delete m.loi_gui; return m; }) || moi;
         for (const id of r.j.can_gui || []) { const a = await DB.get('anh', id); if (a && a.blob) await DB.put('hang', { k: 'anh:' + id, loai: 'anh', id, phong: p.id, th: 2, lan: 0, cho_den: 0, dung: '' }); }
         // bản đang mở trong bộ nhớ cũng phải mang số bản mới — không thì lần lưu kế gửi số bản cũ, tự đụng chính mình (409)
         if (S.rec && S.rec.id === moi.id) { S.rec.rev = moi.rev; S.rec.ghi_de = false; S.rec.anh_co = moi.anh_co; S.rec.sua_luc = moi.sua_luc; delete S.rec.loi_gui; }
         if (moi.dem !== dem) return 'giu';      // thợ sửa tiếp trong lúc gửi: giữ việc, gửi lại bản mới
         return 'xong';
       }
-      if (r.st === 409 && r.j.hien_tai) { moi.xung_dot = r.j.hien_tai; await DB.put('phong', moi); await dungViec(j, 'xung_dot'); if (S.rec && S.rec.id === moi.id) { S.rec.xung_dot = moi.xung_dot; hoiXungDot(); } return 'dung'; }
+      if (r.st === 409 && r.j.hien_tai) { moi = await DB.sua('phong', j.id, m => { m.xung_dot = r.j.hien_tai; return m; }) || moi; await dungViec(j, 'xung_dot'); if (S.rec && S.rec.id === moi.id) { S.rec.xung_dot = moi.xung_dot; hoiXungDot(); } return 'dung'; }
       if (r.st === 422 && r.j.chi_tiet && r.j.chi_tiet.some(c => c.truong === 'ct')) {      // công trình chưa lên: gửi lại công trình trước
         const c = await DB.get('ct', p.ct); if (c) { await xepHang('ct', c.id); return 'giu'; }
       }
-      moi.loi_gui = (r.j.error || 'Máy chủ không nhận') + (r.j.chi_tiet ? ': ' + r.j.chi_tiet.slice(0, 3).map(c => c.truong + ' ' + c.loi).join('; ') : '');
-      await DB.put('phong', moi); await dungViec(j, moi.loi_gui); return 'dung';
+      const lg = (r.j.error || 'Máy chủ không nhận') + (r.j.chi_tiet ? ': ' + r.j.chi_tiet.slice(0, 3).map(c => c.truong + ' ' + c.loi).join('; ') : '');
+      await DB.sua('phong', j.id, m => { m.loi_gui = lg; return m; }); if (S.rec && S.rec.id === j.id) S.rec.loi_gui = lg; await dungViec(j, lg); return 'dung';
     }
     if (j.loai === 'anh') {
       const a = await DB.get('anh', j.id); if (!a || !a.blob) return 'xong';
       const r = await api('PUT', '/api/anh/' + a.id, a.blob, { 'content-type': 'image/jpeg', 'x-phong': a.phong });
       if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
-      if (r.ok || r.st === 409) { a.len = Date.now(); await DB.put('anh', a); const p = await DB.get('phong', a.phong); if (p) { p.anh_co = Array.from(new Set((p.anh_co || []).concat(a.id))); await DB.put('phong', p); if (S.rec && S.rec.id === p.id) S.rec.anh_co = p.anh_co; } return 'xong'; }
-      if (r.st === 404) { const e = new Error('chưa có phòng'); e.st = 503; throw e; }      // phòng chưa lên kịp: thử lại sau
+      if (r.ok || r.st === 409) { a.len = Date.now(); await DB.put('anh', a); const p = await DB.sua('phong', a.phong, m => { m.anh_co = Array.from(new Set((m.anh_co || []).concat(a.id))); return m; }); if (p && S.rec && S.rec.id === p.id) S.rec.anh_co = p.anh_co; return 'xong'; }
+      if (r.st === 410) { await boAnhMay(a.id); return 'xong'; }      // phòng / công trình đã xoá trên máy chủ: thôi gửi
+      if (r.st === 404) {
+        const p = await DB.get('phong', a.phong), conKhai = p && p.anh.some(x => x.id === a.id);
+        if (!conKhai) { await boAnhMay(a.id); return 'xong'; }      // ảnh không còn trong phòng ở máy này nữa
+        if (await DB.get('hang', 'phong:' + a.phong)) { const e = new Error('chờ gửi phòng'); e.st = 503; throw e; }      // phòng còn chờ gửi / chờ chọn bản: lùi lại
+        await xepHang('phong', a.phong); return 'giu';      // máy chủ thiếu phòng / thiếu khai ảnh: gửi lại phòng (kèm ảnh) trước
+      }
       await dungViec(j, r.j.error || 'Máy chủ không nhận ảnh'); return 'dung';
+    }
+    if (j.loai === 'xoa') {
+      const r = await api('DELETE', '/api/phong/' + j.id);
+      if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
+      if (r.ok || r.st === 404) return 'xong';
+      await dungViec(j, r.j.error || 'Máy chủ không xoá phòng'); return 'dung';
     }
     return 'xong';
   }
+  async function boAnhMay(id) { await DB.del('anh', id); await DB.del('hang', 'anh:' + id); if (urlAnh[id]) { URL.revokeObjectURL(urlAnh[id]); delete urlAnh[id]; } }
   async function capThanh() {
+    if (S.can_dn && !S.toi) { thanh.textContent = '⚠ Phiên đăng nhập đã hết — bấm đây để đăng nhập lại (nháp vẫn giữ)'; thanh.className = 'thanh loi'; thanh.dataset.act = 'dang-nhap-lai'; return; }
+    delete thanh.dataset.act;
     if (!S.toi || !DB.db) { thanh.classList.add('an'); return; }
     const ds = await DB.all('hang'), cho = ds.filter(j => !j.dung), dung = ds.filter(j => j.dung && j.dung !== 'xung_dot'), xd = ds.filter(j => j.dung === 'xung_dot');
     let t = '', lp = '';
@@ -140,10 +172,24 @@
 
   /* ================= tấm trượt ================= */
   function moTam(html, tren) { lop.innerHTML = `<div class="man-che${tren ? ' tren' : ''}" data-act="dong-tam-nen"><div class="tam" role="dialog" aria-modal="true">${html}</div></div>`; const o = $('.tam input, .tam textarea, .tam select', lop); if (o && !o.dataset.khongTu) o.focus(); }      // ngay, không hẹn giờ: hẹn giờ là giành tiêu điểm khỏi ô người dùng vừa bấm
-  function dongTam() { lop.innerHTML = ''; }
-  /** Bấm hai lần trong 3 giây (không dùng confirm). */
+  /** Tấm chi tiết / màn kẻ có một mục lịch sử riêng: nút / cử chỉ Quay lại của điện thoại đóng tấm (giữ số, giữ nét) thay vì rời phòng. */
+  function dayLS() { if (!S.ls) { history.pushState({ mndo_tam: 1 }, ''); S.ls = true; } }
+  function dongTam() {
+    lop.innerHTML = ''; S.ct = null;
+    if (S.ls) { S.ls = false; S.bo_pop = true; history.back(); }      // đóng bằng nút: bỏ mục lịch sử của tấm (Quay lại sau đó rời phòng ngay)
+    if (S.can_dn && !S.toi) dangNhapLai();
+  }
+  window.addEventListener('popstate', () => {
+    if (S.bo_pop) { S.bo_pop = false; return; }
+    if (!S.ls) return;
+    S.ls = false;
+    if (K.cv && K.cv.isConnected) luuKe();
+    else if (S.ct) { if ($$('.tam input[data-f]', lop).some(el => el.value.trim())) xongChiTiet(true); else dongTam(); }
+    else dongTam();
+  });
+  /** Bấm hai lần trong 3 giây (không dùng confirm). Khoá theo nút + phòng / ảnh đang mở: lần bấm ở phòng này không tính cho phòng khác. */
   function haiLan(b, chu) {
-    const k = b.dataset.act + ':' + (b.dataset.i || b.dataset.id || '');
+    const k = [b.dataset.act, b.dataset.i || '', b.dataset.id || '', S.rec ? S.rec.id : '', K.cv && K.a ? K.a.id : ''].join(':');
     if (S.xoa_cho[k] && Date.now() - S.xoa_cho[k] < 3000) { delete S.xoa_cho[k]; return true; }
     S.xoa_cho[k] = Date.now(); const cu = b.textContent; b.textContent = chu || 'Bấm lần nữa để chắc chắn'; b.classList.add('xn');
     setTimeout(() => { if (b.isConnected) { b.textContent = cu; b.classList.remove('xn'); } }, 3000);
@@ -174,7 +220,7 @@ ${bao ? `<div class="msg vang">${esc(bao)}</div>` : ''}
   async function nopDangNhap(f) {
     const r = await api('POST', '/api/dang-nhap', { ten: f.ten.value, mat_khau: f.mk.value }).catch(e => ({ st: 0, j: { error: 'Mất mạng — cần mạng để đăng nhập.' } }));
     if (!r.ok) { $('[data-ui="loi"]', f).textContent = r.j.error || 'Không đăng nhập được'; return; }
-    S.toi = r.j; await DB.put('meta', { k: 'toi', v: r.j });
+    S.toi = r.j; S.can_dn = false; await DB.put('meta', { k: 'toi', v: r.j }); await napMay();
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* không xin được */ }
     if (r.j.bat_doi_mk) return veDoiMk(true);
     dinhTuyen(); henChay(100);
@@ -200,11 +246,17 @@ ${bao ? `<div class="msg vang">${esc(bao)}</div>` : ''}
     if (h[0] === 'ql' && h[1] === 'ma' && S.toi.vai === 'quan_ly') return veMa();
     return veDanhSach();
   }
-  window.addEventListener('hashchange', () => { luuNgay(); dinhTuyen(); });
+  window.addEventListener('hashchange', () => { giuTam(); luuNgay(); dinhTuyen(); });
+  /** Rời trang khi đang mở tấm chi tiết / màn kẻ: giữ những gì đã gõ / đã kẻ (không bao giờ bỏ lặng lẽ). */
+  function giuTam() {
+    S.ls = false;
+    if (K.cv && K.cv.isConnected) { const gh = $('[data-ui="ghi-anh"]', lop); if (gh) K.a.ghi = gh.value.slice(0, 200); K.a.ke = JSON.parse(JSON.stringify(K.ke)); K.cv = null; if (S.rec) S.rec.ban = true; }
+    else if (S.ct && S.rec && $$('.tam input[data-f]', lop).some(el => el.value.trim())) { try { ghiChiTiet(true); } catch (e) { /* bỏ qua */ } if (S.rec) S.rec.ban = true; }
+  }
   const di = h => { if (location.hash === h) dinhTuyen(); else location.hash = h; };
 
   /* ================= công trình ================= */
-  async function hangCua() { const ds = await DB.all('hang'); return { ct: new Set(ds.filter(j => j.loai === 'ct').map(j => j.id)), phong: new Set(ds.filter(j => j.loai !== 'ct').map(j => j.loai === 'anh' ? j.phong : j.id)) }; }
+  async function hangCua() { const ds = await DB.all('hang'); return { ct: new Set(ds.filter(j => j.loai === 'ct').map(j => j.id)), phong: new Set(ds.filter(j => j.loai !== 'ct' && j.loai !== 'xoa').map(j => j.loai === 'anh' ? j.phong : j.id)), xoa: new Set(ds.filter(j => j.loai === 'xoa').map(j => j.id)) }; }
   async function veDanhSach() {
     const ql = S.toi.vai === 'quan_ly';
     app.innerHTML = `<header class="dau"><h1>Công trình</h1><button data-act="menu" aria-label="Tài khoản">☰</button></header>
@@ -217,7 +269,7 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
       if (r.ok) {
         const ds = await DB.all('ct'), hang = await hangCua();
         const tren = new Set(r.j.cong_trinh.map(c => c.id));
-        for (const c of r.j.cong_trinh) { const cu = ds.find(x => x.id === c.id); if (!cu || !hang.ct.has(c.id)) await DB.put('ct', Object.assign(cu || {}, { id: c.id, ten: c.ten, dia_chi: c.dia_chi, ngay: c.ngay, nguoi_do: c.nguoi_do, tren_may: true, so_phong: c.so_phong, so_xong: c.so_xong, sua_luc: c.sua_luc })); }
+        for (const c of r.j.cong_trinh) { const cu = ds.find(x => x.id === c.id); if (!cu || !hang.ct.has(c.id)) await DB.put('ct', Object.assign(cu || {}, { id: c.id, ten: c.ten, dia_chi: c.dia_chi, ngay: c.ngay, nguoi_do: c.nguoi_do, tren_may: true, so_phong: c.so_phong, so_xong: c.so_xong, sua_luc: c.sua_luc, cua_toi: c.cua_toi !== false })); }
         for (const c of ds) if (c.tren_may && !tren.has(c.id) && !hang.ct.has(c.id)) await DB.del('ct', c.id);      // đã xoá / lưu trữ ở máy khác
         if (location.hash.replace(/^#\/?/, '') === '') await veDsCt();
       }
@@ -254,12 +306,13 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
   async function veCongTrinh(id) {
     const c = await DB.get('ct', id);
     if (!c) { app.innerHTML = '<header class="dau"><button class="lui" data-act="di" data-h="#/">‹</button><h1>Không thấy công trình</h1></header>'; return; }
-    app.innerHTML = `<header class="dau"><button class="lui" data-act="di" data-h="#/" aria-label="Về danh sách">‹</button><h1>${esc(c.ten)}</h1><button data-act="ct-sua" data-id="${esc(id)}">Sửa</button></header>
+    const chu = c.cua_toi !== false;      // người tạo / quản lý mới sửa / lưu trữ / xoá được (máy chủ cũng chặn)
+    app.innerHTML = `<header class="dau"><button class="lui" data-act="di" data-h="#/" aria-label="Về danh sách">‹</button><h1>${esc(c.ten)}</h1>${chu ? `<button data-act="ct-sua" data-id="${esc(id)}">Sửa</button>` : ''}</header>
 <p class="nhat">${esc([c.dia_chi, c.ngay, c.nguoi_do].filter(Boolean).join(' · '))}</p>
 <ul class="ds" data-ui="ds-ph"></ul>
 <p><button class="chinh to" data-act="ph-moi" data-id="${esc(id)}">+ Phòng mới</button></p>
-<div class="hang" style="margin-top:28px"><button data-act="ct-luu-tru" data-id="${esc(id)}">Lưu trữ công trình</button><button class="do" data-act="ct-xoa" data-id="${esc(id)}">Xoá công trình</button></div>
-<p class="nhat"><small>Lưu trữ: máy vẽ thôi thấy các phòng của công trình này (bỏ lưu trữ được).</small></p>`;
+${chu ? `<div class="hang" style="margin-top:28px"><button data-act="ct-luu-tru" data-id="${esc(id)}">Lưu trữ công trình</button><button class="do" data-act="ct-xoa" data-id="${esc(id)}">Xoá công trình</button></div>
+<p class="nhat"><small>Lưu trữ: máy vẽ thôi thấy các phòng của công trình này (bỏ lưu trữ được).</small></p>` : '<p class="nhat"><small>Công trình của thợ khác: bạn đo thêm phòng được; sửa / lưu trữ / xoá là việc của người tạo hoặc quản lý.</small></p>'}`;
     await veDsPh(id);
     try {
       const r = await api('GET', `/api/cong-trinh/${id}/phong`);
@@ -267,10 +320,11 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
         const hang = await hangCua(), tren = new Set();
         for (const s of r.j.phong) {
           tren.add(s.id);
+          if (hang.xoa.has(s.id)) continue;      // thợ đã xoá ở máy này, việc xoá trên máy chủ còn chờ: đừng tải về lại
           const cu = await DB.get('phong', s.id);
-          if (cu && (cu.rev >= s.rev || hang.phong.has(s.id))) continue;
+          if (cu && (cu.rev >= s.rev || hang.phong.has(s.id))) { if (cu.xoa_duoc !== s.xoa_duoc && !(S.rec && S.rec.id === cu.id)) { cu.xoa_duoc = s.xoa_duoc; await DB.put('phong', cu); } continue; }
           const d = await api('GET', '/api/phong/' + s.id);
-          if (d.ok) await DB.put('phong', { id: d.j.id, ct: d.j.ct, ten: d.j.ten, xong: d.j.xong, ghi_chu: d.j.ghi_chu, phong: d.j.phong, anh: d.j.anh, rev: d.j.rev, dem: 0, anh_co: d.j.anh_co, sua_luc: d.j.sua_luc });
+          if (d.ok) await DB.put('phong', { id: d.j.id, ct: d.j.ct, ten: d.j.ten, xong: d.j.xong, ghi_chu: d.j.ghi_chu, phong: d.j.phong, anh: d.j.anh, rev: d.j.rev, dem: 0, anh_co: d.j.anh_co, sua_luc: d.j.sua_luc, xoa_duoc: d.j.xoa_duoc });
         }
         for (const p of await DB.all('phong')) if (p.ct === id && p.rev && !tren.has(p.id) && !hang.phong.has(p.id)) await DB.del('phong', p.id);
         if (location.hash === '#/ct/' + id) await veDsPh(id);
@@ -307,9 +361,9 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
   const phanTich = rec => G.phanTich(Object.assign({}, rec.phong, { ten: rec.ten }), rec.anh, Ph);
   async function vePhong(id) {
     let rec = await DB.get('phong', id);
-    if (!rec) { try { const d = await api('GET', '/api/phong/' + id); if (d.ok) { rec = { id, ct: d.j.ct, ten: d.j.ten, xong: d.j.xong, ghi_chu: d.j.ghi_chu, phong: d.j.phong, anh: d.j.anh, rev: d.j.rev, dem: 0, anh_co: d.j.anh_co }; await DB.put('phong', rec); } } catch (e) { /* mất mạng */ } }
+    if (!rec) { try { const d = await api('GET', '/api/phong/' + id); if (d.ok) { rec = { id, ct: d.j.ct, ten: d.j.ten, xong: d.j.xong, ghi_chu: d.j.ghi_chu, phong: d.j.phong, anh: d.j.anh, rev: d.j.rev, dem: 0, anh_co: d.j.anh_co, xoa_duoc: d.j.xoa_duoc }; await DB.put('phong', rec); } } catch (e) { /* mất mạng */ } }
     if (!rec) { app.innerHTML = '<header class="dau"><button class="lui" data-act="di" data-h="#/">‹</button><h1>Không thấy phòng</h1></header>'; return; }
-    if (!S.rec || S.rec.id !== id) S.mo = 0;
+    if (!S.rec || S.rec.id !== id) { S.mo = 0; S.sai = {}; }
     S.rec = rec;
     const p = rec.phong;
     app.innerHTML = `<header class="dau"><button class="lui" data-act="di" data-h="#/ct/${esc(rec.ct)}" aria-label="Về công trình">‹</button><h1 data-ui="ten-ph">${esc(rec.ten)}</h1></header>
@@ -322,10 +376,10 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
 <p><button class="to" data-act="chup" data-tuong="">📷 Ảnh toàn cảnh</button></p>
 <h2>Thông tin phòng</h2>
 <label>Tên phòng<input data-o="ten" maxlength="60" value="${esc(rec.ten)}"></label>
-<label>Cao trần (mm)<input data-o="cao" inputmode="decimal" value="${p.cao > 0 ? esc(p.cao) : ''}"></label>
+<label>Cao trần (mm)<input data-o="cao" inputmode="decimal" value="${p.cao > 0 ? esc(p.cao) : ''}"${S.sai.cao ? ' aria-invalid="true"' : ''}></label>
 <label>Ghi chú phòng<textarea data-o="ghi_chu" maxlength="500">${esc(rec.ghi_chu || '')}</textarea></label>
 <label class="cong-tac"><input type="checkbox" data-o="xong"${rec.xong ? ' checked' : ''}> Đo xong phòng này</label>
-<p><button class="do" data-act="xoa-phong">Xoá phòng</button></p>
+${rec.xoa_duoc === false ? '' : `<p><button class="do" data-act="xoa-phong" data-id="${esc(rec.id)}">Xoá phòng</button></p>`}
 <input type="file" accept="image/*" capture="environment" class="an" data-ui="tep" multiple>`;
     veTuongs(); capPhanTich(); veAnhs();
     if (rec.xung_dot) hoiXungDot();
@@ -333,6 +387,7 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
   function veTuongs() {
     const el = $('[data-ui="tuongs"]'); if (!el || !S.rec) return;
     const p = S.rec.phong, A = phanTich(S.rec);
+    for (const k of Object.keys(S.sai)) if (k.startsWith('tuong.')) delete S.sai[k];      // ô dựng lại hiện số đang giữ
     el.innerHTML = p.tuong.map((t, i) => {
       const mo = S.mo === i;
       return `<div class="tuong${mo ? ' mo' : ''}" data-i="${i}"><button class="dau-t" data-act="mo-tuong" data-i="${i}" aria-expanded="${mo}"><b>${esc(t.ten)}</b><span data-tom="${i}" class="nhat"></span><span style="margin-left:auto">${mo ? '▾' : '▸'}</span></button>${mo ? thanTuong(i, A) : ''}</div>`;
@@ -373,6 +428,7 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
     if (tt) {
       const L = [];
       L.push(`<div class="msg ok">${esc(Ph.tomTat(H)[0] || '')}</div>`);
+      for (const [o, t] of Object.entries(S.sai)) L.push(`<div class="msg loi">${esc(tenO(o))}: ${esc(t)} — máy đang giữ số cũ.</div>`);
       for (const t of A.gui.loi) L.push(`<div class="msg loi">${esc(t)}</div>`);
       if (A.goi_y_suy.length) L.push(`<div class="hang">${A.goi_y_suy.map(i => `<button data-act="de-suy" data-i="${i}">Để tường ${esc(r.phong.tuong[i].ten)} tự suy</button>`).join('')}</div>`);
       for (const t of A.luu_y) L.push(`<div class="msg vang">${esc(t)}</div>`);
@@ -387,6 +443,7 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
       if (tm) tm.textContent = (dai > 0 ? (A.suy[i] ? `≈ ${g(dai)} (tự suy)` : g(dai)) : 'chưa đo') + (n ? ` · ${n} chi tiết` : '') + (t.re !== 90 ? ` · rẽ ${g(t.re)}°` : '');
     });
   }
+  const tenO = o => { const m = /^tuong\.(\d+)\.(\w+)$/.exec(o), t = m && S.rec.phong.tuong[+m[1]]; if (o === 'cao') return 'Cao trần'; if (!t) return o; return m[2] === 'dai' ? `Dài tường ${t.ten}` : m[2] === 'cao' ? `Cao riêng tường ${t.ten}` : `Góc trong tường ${t.ten}`; };
   /** Ghi phòng đang mở: ngay vào IndexedDB (sau 800 ms không gõ), xếp việc gửi. */
   function henLuu() { clearTimeout(S.hen); S.hen = setTimeout(luuNgay, 800); }
   async function luuNgay() {
@@ -402,6 +459,11 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
 
   function suaO(o, v, el) {
     const r = S.rec, p = r.phong, m = /^tuong\.(\d+)\.(\w+)$/.exec(o);
+    if (o === 'cao' || m) {      // ô số: chữ lạ / số âm / quá lớn → báo đỏ ngay ở ô, giữ số cũ (không lặng lẽ thành "để trống = tự suy")
+      const d = docO(v, m && m[2] === 'goc_trong' ? 1 : 0);
+      if (d.sai) { S.sai[o] = d.sai; if (el) el.setAttribute('aria-invalid', 'true'); capPhanTich(); return; }
+      delete S.sai[o]; if (el) el.removeAttribute('aria-invalid');
+    }
     if (o === 'ten') { r.ten = v.slice(0, 60); p.ten = r.ten; const h = $('[data-ui="ten-ph"]'); if (h) h.textContent = r.ten || 'Phòng'; }
     else if (o === 'cao') p.cao = soDoc(v);
     else if (o === 'ghi_chu') r.ghi_chu = v.slice(0, 500);
@@ -431,7 +493,7 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
   function moChiTiet(nhom, i, j) {
     const p = S.rec.phong, cu = j !== undefined ? p[nhom][j] : null;
     const x = cu ? JSON.parse(JSON.stringify(cu)) : { id: '', tuong: i, loai: CHI[nhom].mac, tu: 'trai' };
-    S.ct = { nhom, j, x };
+    S.ct = { nhom, j, x, go: {} };
     veChiTiet();
   }
   function oChiTiet(nhom, x) {
@@ -445,24 +507,40 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
     const goiY = k => (nhom === 'dn' && (k === 'cao' || k === 'ra') && L[k] !== undefined ? L[k] : null);
     const o = oChiTiet(nhom, x).map(([k, nh]) => k === 'ghi'
       ? `<label>${esc(nh)}<input data-f="ghi" maxlength="40" value="${esc(x.ghi || '')}"></label>`
-      : `<label>${esc(nh)} (mm)<input data-f="${k}" inputmode="decimal" value="${x[k] === null || x[k] === undefined ? '' : esc(x[k])}"${goiY(k) !== null ? ` placeholder="gợi ý ${goiY(k)}"` : ''}></label>${goiY(k) !== null ? `<button type="button" data-act="dung-goi-y" data-f="${k}" data-v="${goiY(k)}">Đúng như gợi ý (${goiY(k)})</button>` : ''}`).join('');
+      : `<label>${esc(nh)} (mm)<input data-f="${k}" data-nhan="${esc(nh)}" inputmode="decimal" value="${S.ct.go[k] !== undefined ? esc(S.ct.go[k]) : x[k] === null || x[k] === undefined ? '' : esc(x[k])}"${goiY(k) !== null ? ` placeholder="gợi ý ${goiY(k)}"` : ''}></label>${goiY(k) !== null ? `<button type="button" data-act="dung-goi-y" data-f="${k}" data-v="${goiY(k)}">Đúng như gợi ý (${goiY(k)})</button>` : ''}`).join('');
     moTam(`<h3>${j !== undefined ? 'Sửa' : 'Thêm'} chi tiết — tường ${esc(S.rec.phong.tuong[x.tuong].ten)}</h3>
 <div data-ui="loai">${Object.entries(ten).map(([k, t]) => `<button type="button" class="chip" data-act="ct-loai" data-v="${k}" aria-pressed="${x.loai === k}">${esc(t)}</button>`).join('')}</div>
 <label class="cong-tac"><input type="checkbox" data-act="ct-phai" data-khong-tu="1"${x.tu === 'phai' ? ' checked' : ''}> Đo từ góc phải</label>
 ${o}
+<div class="loi-o" data-ui="loi-ct"></div>
 <div class="hang" style="margin-top:12px">${j !== undefined ? '<button class="do" data-act="ct-xoa">Xoá</button>' : '<button data-act="dong-tam">Thôi</button>'}<button class="chinh" data-act="ct-xong">Xong</button></div>`);
+    dayLS();
     const dau = $('.tam input[data-f]', lop); if (dau) dau.focus();
   }
+  /** Đọc các ô của tấm chi tiết. Ô gõ sai giữ nguyên chữ (S.ct.go) để dựng lại tấm không mất; trả danh sách lỗi. */
   function docChiTiet() {
-    const x = S.ct.x;
-    for (const el of $$('.tam [data-f]', lop)) { const k = el.dataset.f; if (k === 'ghi') { if (el.value.trim()) x.ghi = el.value.trim(); else delete x.ghi; } else x[k] = soDoc(el.value); }
-    return x;
+    const x = S.ct.x, loi = [];
+    S.ct.go = {};
+    for (const el of $$('.tam [data-f]', lop)) {
+      const k = el.dataset.f;
+      if (k === 'ghi') { if (el.value.trim()) x.ghi = el.value.trim(); else delete x.ghi; continue; }
+      const d = docO(el.value);
+      if (d.sai) { S.ct.go[k] = el.value; x[k] = null; loi.push(`${el.dataset.nhan || k}: ${d.sai}`); el.setAttribute('aria-invalid', 'true'); } else { x[k] = d.v; el.removeAttribute('aria-invalid'); }
+    }
+    return { x, loi };
   }
-  function xongChiTiet() {
-    const { nhom, j } = S.ct, x = docChiTiet(), p = S.rec.phong;
+  /** Ghi chi tiết đang mở vào phòng (boQuaLoi: ô sai thành trống — dùng khi rời tấm bằng Quay lại). */
+  function ghiChiTiet(boQuaLoi) {
+    const { nhom, j } = S.ct, { x, loi } = docChiTiet(), p = S.rec.phong;
+    if (loi.length && !boQuaLoi) return loi;
     if (nhom === 'dn') { const L = Ph.LOAI_DN[x.loai]; if (L.san) delete x.cao; else delete x.ra; }
     if (j === undefined) { x.id = (nhom === 'mo' ? 'm' : nhom === 'can' ? 'c' : 'd') + ngauNhien(6); p[nhom].push(x); } else p[nhom][j] = x;
-    S.ct = null; dongTam(); doi(); veTuongs(); capPhanTich(); veAnhs();
+    return [];
+  }
+  function xongChiTiet(boQuaLoi) {
+    const loi = ghiChiTiet(boQuaLoi);
+    if (loi.length) { const o = $('[data-ui="loi-ct"]', lop); if (o) o.textContent = loi.join(' · ') + ' — sửa rồi bấm Xong.'; return; }
+    dongTam(); doi(); veTuongs(); capPhanTich(); veAnhs();
   }
 
   /* ----- ảnh ----- */
@@ -524,6 +602,7 @@ ${o}
     const img = new Image(); img.src = await srcAnh(id);
     await new Promise(ok => { img.onload = ok; img.onerror = ok; });
     K.img = img; K.cv = $('[data-ui="ke-canvas"]', lop); K.kinh = $('[data-ui="kinh"]', lop);
+    dayLS();
     khopKe(); veKeCanvas(); veDsNet();
     K.cv.addEventListener('pointerdown', keXuong); K.cv.addEventListener('pointermove', keDi); K.cv.addEventListener('pointerup', keLen); K.cv.addEventListener('pointercancel', keLen);
   }
@@ -599,7 +678,9 @@ ${o}
     if (K.che === 'chi') { hoiChu('Ghi chú (để trống = chỉ mũi tên)', '', t => { K.ke.push({ loai: 'chi', a: d.a, b: d.b, text: t || '' }); xongNet(); }, true); return; }
     hoiSo(d);
   }
-  function xongNet() { dongTamTren(); veKeCanvas(); veDsNet(); }
+  /** Mỗi nét thêm / bỏ ghi NGAY vào phòng (rồi IndexedDB sau 800 ms): đóng màn kẻ kiểu gì (Quay lại, hết phiên, tải lại) cũng không mất nét. */
+  function ghiNet() { if (!K.a || !S.rec) return; K.a.ke = JSON.parse(JSON.stringify(K.ke)); doi(); }
+  function xongNet() { dongTamTren(); veKeCanvas(); veDsNet(); ghiNet(); }
   function moTamTren(html) {
     let el = $('[data-ui="tam-tren"]', lop); if (!el) { el = document.createElement('div'); el.dataset.ui = 'tam-tren'; lop.appendChild(el); }
     el.innerHTML = `<div class="man-che" style="z-index:40"><div class="tam" role="dialog" aria-modal="true">${html}</div></div>`;
@@ -622,22 +703,33 @@ ${o}
   function luuKe() {
     const gh = $('[data-ui="ghi-anh"]', lop);
     K.a.ghi = gh ? gh.value.slice(0, 200) : K.a.ghi;
-    K.a.ke = K.ke; doi(); luuNgay(); lop.innerHTML = ''; K.cv = null;
+    K.a.ke = K.ke; K.cv = null; doi(); luuNgay(); dongTam();
     veAnhs(); capPhanTich();
   }
 
   /* ================= xung đột ================= */
+  /** Ảnh chụp ở máy này mà máy chủ chưa từng có (chưa lên) — bản máy chủ không thể biết tới chúng, "Lấy bản máy chủ" vẫn giữ. */
+  const anhChiMayNay = (r, h) => { const tren = new Set((h.anh || []).map(a => a.id).concat(h.anh_co || [], r.anh_co || [])); return r.anh.filter(a => !tren.has(a.id)); };
   function hoiXungDot() {
     const r = S.rec, h = r.xung_dot; if (!h) return;
+    const n = anhChiMayNay(r, h).length;
     moTam(`<h3>Phòng “${esc(r.ten)}” vừa được sửa ở máy khác</h3><p>Máy chủ đang giữ bản sửa lúc ${esc(gioPhut(h.sua_luc))}. Chọn bản giữ lại:</p>
-<div class="hang"><button data-act="xd-giu">Giữ bản máy này</button><button class="chinh" data-act="xd-lay">Lấy bản máy chủ</button></div>`);
+<ul class="nhat"><li><b>Giữ bản máy này</b>: bản trên máy chủ bị thay bằng số đo của máy này.</li><li><b>Lấy bản máy chủ</b>: số đo / nét kẻ sửa ở máy này từ lần gửi trước bị bỏ.${n ? ` ${n} ảnh chụp ở máy này chưa lên máy chủ — giữ lại (kèm nét đã kẻ) ở cả hai cách.` : ''}</li></ul>
+<div class="hang"><button data-act="xd-giu">Giữ bản máy này</button><button data-act="xd-lay">Lấy bản máy chủ</button></div>`);
   }
   async function xungDot(giu) {
     const r = S.rec, h = r.xung_dot; if (!h) return dongTam();
+    let guiLai = giu;
     if (giu) { r.rev = h.rev; r.ghi_de = true; }
-    else { Object.assign(r, { ten: h.ten, xong: h.xong, ghi_chu: h.ghi_chu, phong: h.phong, anh: h.anh, rev: h.rev, anh_co: h.anh_co, ghi_de: false }); }
+    else {
+      const giuAnh = anhChiMayNay(r, h), cu = r.anh;
+      Object.assign(r, { ten: h.ten, xong: h.xong, ghi_chu: h.ghi_chu, phong: h.phong, anh: h.anh.concat(giuAnh), rev: h.rev, anh_co: h.anh_co, ghi_de: false });
+      // ảnh máy này đã lên rồi mà bản máy chủ bỏ (máy kia xoá): dọn tệp trong máy
+      const con = new Set(r.anh.map(a => a.id)); for (const a of cu) if (!con.has(a.id)) await boAnhMay(a.id);
+      if (giuAnh.length) { guiLai = true; r.dem = (r.dem || 0) + 1; }      // khai ảnh còn giữ lên máy chủ
+    }
     delete r.xung_dot; await DB.put('phong', r);
-    if (giu) await DB.put('hang', { k: 'phong:' + r.id, loai: 'phong', id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
+    if (guiLai) await DB.put('hang', { k: 'phong:' + r.id, loai: 'phong', id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
     else await DB.del('hang', 'phong:' + r.id);
     dongTam(); vePhong(r.id); capThanh(); henChay(200);
   }
@@ -649,6 +741,10 @@ ${o}
     const r = await api('GET', '/api/quan-ly/tai-khoan').catch(() => null);
     const el = $('[data-ui="ds-tk"]'); if (!el) return;
     if (!r || !r.ok) { el.innerHTML = '<li class="msg loi">Cần mạng để quản lý tài khoản.</li>'; return; }
+    api('GET', '/api/quan-ly/dung-luong').then(d => {      // dung lượng ảnh: máy chủ dùng chung với ERP — đầy đĩa là ERP chết
+      if (!d.ok || !el.isConnected) return; const G1 = 1024 * 1024 * 1024, x = d.j, day = x.anh_bytes / x.tran_bytes;
+      el.insertAdjacentHTML('beforebegin', `<div class="msg ${day > 0.8 || (x.dia_trong !== null && x.dia_trong < 2 * x.dia_trong_min) ? 'loi' : 'xam'}" data-ui="dung-luong">Ảnh: ${x.so_anh} tệp, ${g(x.anh_bytes / G1)} / ${g(x.tran_bytes / G1)} GB${x.dia_trong !== null ? ` · đĩa còn trống ${g(x.dia_trong / G1)} GB` : ''}</div>`);
+    }).catch(() => null);
     el.innerHTML = r.j.tai_khoan.map(t => `<li class="the"><b>${esc(t.ten_hien)}</b> <small>${esc(t.ten)} · ${t.vai === 'quan_ly' ? 'quản lý' : 'thợ'}${t.khoa ? ' · ĐÃ KHOÁ' : ''}${t.bat_doi_mk ? ' · chưa đổi mật khẩu tạm' : ''}</small>
 <div class="hang" style="margin-top:8px">${t.ten === S.toi.ten ? '<span class="nhat">(bạn)</span>' : `${t.khoa ? `<button data-act="tk-mo" data-id="${t.id}">Mở khoá</button>` : `<button class="do" data-act="tk-khoa" data-id="${t.id}">Khoá</button>`}<button data-act="tk-mk" data-id="${t.id}" data-ten="${esc(t.ten)}">Đặt lại mật khẩu</button>`}</div></li>`).join('');
   }
@@ -679,7 +775,8 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
   const XL = {
     'di': b => di(b.dataset.h),
     'dong-tam': () => dongTam(),
-    'dong-tam-nen': (b, e) => { if (e.target === b) dongTam(); },
+    'dong-tam-nen': (b, e) => { if (e.target === b && !$('.tam input, .tam textarea, .tam select', lop)) dongTam(); },      // tấm có ô nhập: chạm nhầm nền không đóng (mất số vừa gõ)
+    'dang-nhap-lai': () => { lop.innerHTML = ''; S.ls = false; giuTam(); dangNhapLai(); },
     've-dau': () => di('#/'),
     'menu': () => moTam(`<h3>${esc(S.toi.ten_hien)} <small class="nhat">(${esc(S.toi.ten)})</small></h3><div class="hang"><button data-act="doi-mk">Đổi mật khẩu</button><button class="do" data-act="dang-xuat">Đăng xuất</button></div><p><button data-act="dong-tam">Đóng</button></p>`),
     'doi-mk': () => { dongTam(); veDoiMk(false); },
@@ -687,7 +784,7 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
       const n = (await DB.all('hang')).length;
       if (n && !haiLan(b, `Còn ${n} thay đổi chưa gửi — bấm lần nữa để BỎ và đăng xuất`)) return;
       await api('POST', '/api/dang-xuat').catch(() => null);
-      await DB.xoaHet(); S.toi = null; S.rec = null; location.hash = '#/'; veDangNhap('Đã đăng xuất.');
+      await DB.xoaHet(); S.toi = null; S.rec = null; S.may = ''; location.hash = '#/'; veDangNhap('Đã đăng xuất.');
     },
     'ct-moi': () => moFormCt(null),
     'ct-sua': async b => moFormCt(await DB.get('ct', b.dataset.id)),
@@ -696,7 +793,7 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
       if (!haiLan(b, 'Bấm lần nữa để XOÁ cả công trình')) return;
       const c = await DB.get('ct', b.dataset.id);
       if (c && c.tren_may) { const r = await api('DELETE', '/api/cong-trinh/' + c.id).catch(() => null); if (!r || !r.ok) return alertCt(r && r.j.error ? r.j.error : 'Cần mạng để xoá.'); }
-      for (const p of await DB.all('phong')) if (p.ct === b.dataset.id) { await DB.del('phong', p.id); await DB.del('hang', 'phong:' + p.id); }
+      for (const p of await DB.all('phong')) if (p.ct === b.dataset.id) { for (const a of p.anh) await boAnhMay(a.id); await DB.del('phong', p.id); await DB.del('hang', 'phong:' + p.id); }
       await DB.del('ct', b.dataset.id); await DB.del('hang', 'ct:' + b.dataset.id); di('#/');
     },
     'ph-moi': b => moFormPh(b.dataset.id),
@@ -726,13 +823,13 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
     'chup': b => chup(b.dataset.tuong === '' ? null : +b.dataset.tuong),
     'ke': b => moKe(b.dataset.id),
     'ke-che': b => { K.che = b.dataset.v; for (const c of $$('[data-act="ke-che"]', lop)) c.setAttribute('aria-pressed', String(c === b)); },
-    'ke-lui': () => { K.ke.pop(); veKeCanvas(); veDsNet(); },
-    'ke-bo': b => { K.ke.splice(+b.dataset.i, 1); veKeCanvas(); veDsNet(); },
+    'ke-lui': () => { K.ke.pop(); veKeCanvas(); veDsNet(); ghiNet(); },
+    'ke-bo': b => { K.ke.splice(+b.dataset.i, 1); veKeCanvas(); veDsNet(); ghiNet(); },
     'ke-xong': () => luuKe(),
     'ke-xoa-anh': async b => {
       if (!haiLan(b, 'Bấm lần nữa để xoá ảnh')) return;
       const id = K.a.id; S.rec.anh = S.rec.anh.filter(a => a !== K.a); await DB.del('anh', id); await DB.del('hang', 'anh:' + id);
-      doi(); luuNgay(); lop.innerHTML = ''; K.cv = null; veAnhs();
+      K.cv = null; doi(); luuNgay(); dongTam(); veAnhs();
     },
     'hoi-thoi': () => { K.hoi = null; K.cho = null; xongNet(); },
     'hoi-xong': () => { const i = $('[data-ui="hoi-chu"]', lop), f = K.hoi; K.hoi = null; if (f) f((i ? i.value : '').trim()); },
@@ -741,9 +838,12 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
     'xoa-phong': async b => {
       if (!haiLan(b, 'Bấm lần nữa để xoá phòng này')) return;
       const r = S.rec;
-      if (r.rev) { const x = await api('DELETE', '/api/phong/' + r.id).catch(() => null); if (!x || (!x.ok && x.st !== 404)) return alertNho('Cần mạng để xoá phòng đã gửi lên máy chủ.'); }
-      for (const a of r.anh) { await DB.del('anh', a.id); await DB.del('hang', 'anh:' + a.id); }
-      await DB.del('phong', r.id); await DB.del('hang', 'phong:' + r.id); clearTimeout(S.hen); S.rec = null; di('#/ct/' + r.ct);
+      if (r.rev) { const x = await api('DELETE', '/api/phong/' + r.id).catch(() => null); if (!x || (!x.ok && x.st !== 404)) return alertNho(x && x.j.error ? x.j.error : 'Cần mạng để xoá phòng đã gửi lên máy chủ.'); }
+      for (const a of r.anh) await boAnhMay(a.id);
+      await DB.del('phong', r.id); await DB.del('hang', 'phong:' + r.id); clearTimeout(S.hen); S.rec = null;
+      // phòng chưa có số bản: có khi lần gửi đầu đang đi (máy chủ sắp có phòng) — xếp việc xoá, chạy sau lần gửi đó (404 = máy chủ chưa từng có: xong)
+      if (!r.rev) await xepHang('xoa', r.id);
+      di('#/ct/' + r.ct);
     },
     'xd-giu': () => xungDot(true), 'xd-lay': () => xungDot(false),
     'tk-moi': () => moFormTk(),
@@ -812,10 +912,13 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
   });
 
   /* ================= mở trang ================= */
+  /** Mã máy (ngẫu nhiên, nhớ trong máy): máy chủ nhận ra lần gửi lại của chính máy này sau khi mất trả lời — không báo oan "sửa ở máy khác". */
+  async function napMay() { const m = await DB.get('meta', 'may'); if (m && m.v) S.may = m.v; else { S.may = 'may' + ngauNhien(16); await DB.put('meta', { k: 'may', v: S.may }); } }
   async function batDau() {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => null);
     await DB.mo();
     const m = await DB.get('meta', 'toi'); S.toi = m ? m.v : null;
+    await napMay();
     try {
       const r = await api('GET', '/api/toi');
       if (r.ok) { S.toi = r.j; await DB.put('meta', { k: 'toi', v: r.j }); }
