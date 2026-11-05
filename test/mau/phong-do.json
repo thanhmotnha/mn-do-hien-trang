@@ -1,0 +1,188 @@
+{
+ "_nguon": "mn-chenfeng test/phong.test.js PHONG_DO() — commit 65bd4b7 (bản 1.41.0)",
+ "phong": {
+  "ct": {
+   "id": "ct0000000001",
+   "ten": "Nhà anh Hùng",
+   "dia_chi": "Chiềng Sinh",
+   "ngay": "2026-10-04",
+   "nguoi_do": "Thanh"
+  },
+  "nguoi_gui": "Thanh",
+  "sua_luc": 1791100000000,
+  "muc": {
+   "id": "muc000000001",
+   "loai": "phong",
+   "ten": "Phòng ngủ master",
+   "xong": true,
+   "ghi_chu": "",
+   "phong": {
+    "ban": 1,
+    "ten": "Phòng ngủ master",
+    "cao": 2700,
+    "day": 110,
+    "tuong": [
+     {
+      "ten": "A",
+      "dai": 3600,
+      "re": 90
+     },
+     {
+      "ten": "B",
+      "dai": 3000,
+      "re": 90
+     },
+     {
+      "ten": "C",
+      "dai": 0,
+      "re": 90
+     },
+     {
+      "ten": "D",
+      "dai": 0,
+      "re": 90
+     }
+    ],
+    "mo": [],
+    "can": [],
+    "dn": [],
+    "khung": []
+   },
+   "gui": {
+    "ban": 1,
+    "phong": {
+     "ban": 1,
+     "ten": "Phòng ngủ master",
+     "cao": 2700,
+     "day": 110,
+     "tuong": [
+      {
+       "ten": "A",
+       "dai": 3600,
+       "re": 90
+      },
+      {
+       "ten": "B",
+       "dai": 3000,
+       "re": 90
+      },
+      {
+       "ten": "C",
+       "dai": 3600,
+       "re": 90
+      },
+      {
+       "ten": "D",
+       "dai": 3000,
+       "re": 90
+      }
+     ],
+     "mo": [
+      {
+       "tuong": 2,
+       "loai": "cua",
+       "cach": 200,
+       "rong": 900,
+       "cao": 2200,
+       "be": 0
+      }
+     ],
+     "can": [
+      {
+       "tuong": 1,
+       "loai": "cot",
+       "cach": 1000,
+       "rong": 300,
+       "nho": 200,
+       "z0": 0,
+       "z1": 2700
+      }
+     ],
+     "dn": [],
+     "khung": []
+    },
+    "bo": [
+     "Ổ điện 1 (mặt A)"
+    ],
+    "loi": [],
+    "anh": [
+     {
+      "id": "anh000000001",
+      "tuong": 0,
+      "w": 800,
+      "h": 600,
+      "ghi": "mặt có cửa sổ",
+      "co": 30.8,
+      "net": [
+       [
+        80,
+        300,
+        720,
+        300
+       ],
+       [
+        80,
+        286.1,
+        80,
+        313.9
+       ],
+       [
+        720,
+        286.1,
+        720,
+        313.9
+       ],
+       [
+        400,
+        120,
+        480,
+        240
+       ],
+       [
+        480,
+        240,
+        476.2,
+        212.5
+       ],
+       [
+        480,
+        240,
+        456.1,
+        225.9
+       ]
+      ],
+      "chu": [
+       {
+        "text": "3600",
+        "x": 400,
+        "y": 275.4,
+        "co": 30.8,
+        "goc": 0
+       },
+       {
+        "text": "ổ điện cũ",
+        "x": 160,
+        "y": 120,
+        "co": 30.8,
+        "goc": 0
+       }
+      ]
+     },
+     {
+      "id": "anh000000002",
+      "tuong": null,
+      "w": 600,
+      "h": 800,
+      "ghi": "toàn cảnh",
+      "co": 30.8,
+      "net": [],
+      "chu": []
+     }
+    ]
+   }
+  },
+  "anh_co": [
+   "anh000000001"
+  ]
+ }
+}

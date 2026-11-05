@@ -1,0 +1,39 @@
+name: Build and Deploy
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+concurrency: { group: mndo-deploy, cancel-in-progress: false }
+jobs:
+  deploy:
+    runs-on: [self-hosted, mndo]          # runner RIÊNG của kho này (nhãn mndo) trên máy chủ ERP — không dùng runner của ERP
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lấy mn-chenfeng (cho phép thử hợp đồng với máy vẽ)
+        run: |
+          rm -rf "$RUNNER_TEMP/mn-chenfeng"
+          git clone --depth 1 "${{ vars.MNCF_KHO || 'https://github.com/thanhmotnha/mn-chenfeng.git' }}" "$RUNNER_TEMP/mn-chenfeng"
+      - name: Phép thử (trong container Node, không cài gì lên máy chủ)
+        run: |
+          docker run --rm -v "$PWD":/app:ro -v "$RUNNER_TEMP/mn-chenfeng":/mncf:ro -w /app \
+            -e MNCF_PHONG=/mncf/src/mncf-phong.js node:22-alpine \
+            node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js
+      - name: Ghi .env
+        run: |
+          umask 077
+          cat > .env <<EOT
+          PUBLIC_URL=${{ vars.PUBLIC_URL || 'https://do.motnha.vn' }}
+          QUAN_LY_TEN=${{ secrets.QUAN_LY_TEN || 'quanly' }}
+          QUAN_LY_MAT_KHAU_DAU=${{ secrets.QUAN_LY_MAT_KHAU_DAU }}
+          ANH_MAX_MB=4
+          EOT
+          sed -i 's/^[[:space:]]*//' .env
+      - name: Dựng + chạy (thử lại 3 lần như ERP)
+        run: |
+          set -e
+          for i in 1 2 3; do docker compose -p mndo build app && break; [ "$i" -eq 3 ] && exit 1; sleep 20; done
+          docker compose -p mndo up -d
+          docker image prune -f          # chỉ ảnh lơ lửng (dangling) — không đụng ảnh / container của ERP
+      - name: Chờ sức khoẻ
+        run: |
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/api/suc-khoe && exit 0; sleep 2; done
+          docker logs --tail 80 mndo-app; exit 1
