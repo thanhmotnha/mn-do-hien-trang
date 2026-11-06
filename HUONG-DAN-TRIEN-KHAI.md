@@ -6,7 +6,7 @@ Trang "Đo hiện trạng" (thợ đo dùng điện thoại) chạy **riêng** b
 |---|---|---|
 | Dự án Docker | `mndo` | `motnha` |
 | Container | `mndo-app` | `motnha-app`, `motnha-postgres` |
-| Cổng | `127.0.0.1:3100` (chỉ trong máy chủ) | 3000, 5432 |
+| Cổng | `127.0.0.1:3110` (chỉ trong máy chủ; 3100 đã là của Paperclip) | 3000, 5432 |
 | Dữ liệu | ổ dữ liệu Docker `mndo_data` (CSDL + ảnh + bản sao lưu) | `postgres_data`, `uploads_data` |
 | Runner GitHub | runner riêng, nhãn `mndo` | runner của kho ERP |
 | Địa chỉ ngoài | `https://do.motnha.vn` | `https://erp.motnha.vn` |
@@ -82,7 +82,7 @@ Kiểm trên máy chủ (tuỳ chọn):
 
 ```bash
 docker ps --filter name=mndo              # dòng mndo-app … (healthy)
-curl http://127.0.0.1:3100/api/suc-khoe   # {"ok":true,"ban":"0.1.1"}
+curl http://127.0.0.1:3110/api/suc-khoe   # {"ok":true,"ban":"0.1.1"}
 ```
 
 Lưu ý: mỗi lần ERP triển khai, nó dọn container đang **dừng** và ảnh cũ. `mndo-app` đang chạy thì không bị đụng. Nếu lúc đó `mndo-app` đang dừng thì container bị xoá — dữ liệu (`mndo_data`) vẫn còn nguyên, chỉ cần chạy lại workflow của kho này (Run workflow).
@@ -93,13 +93,13 @@ Tunnel (đường hầm) đang đưa `erp.motnha.vn` vào máy chủ; dùng chun
 
 1. Cloudflare → **Zero Trust → Networks → Tunnels** → bấm tunnel đang dùng cho ERP → thẻ **Public Hostname**.
 2. Xem dòng `erp.motnha.vn` đang trỏ tới đâu (cột Service):
-   - **`http://localhost:3000`** → bấm **Add a public hostname**: Subdomain `do`, Domain `motnha.vn`, Type **HTTP**, URL `localhost:3100` → **Save**.
+   - **`http://localhost:3000`** → bấm **Add a public hostname**: Subdomain `do`, Domain `motnha.vn`, Type **HTTP**, URL `localhost:3110` → **Save**.
    - **`http://motnha-app:3000`** (tức cloudflared chạy trong Docker, `localhost` không tới được) → trước hết trên máy chủ chạy `docker ps --format '{{.Names}}' | grep -i cloudflare` để biết tên container cloudflared, rồi `docker network connect mndo_net <tên đó>`; sau đó thêm hostname như trên nhưng URL là `mndo-app:3100`.
    - Trang báo tunnel "cấu hình bằng tệp" (không sửa được trên web) → trên máy chủ mở `/etc/cloudflared/config.yml`, thêm hai dòng dưới đây **phía trên** dòng `- service: http_status:404` (thụt lề giống các dòng `- hostname:` sẵn có), rồi `sudo systemctl restart cloudflared`:
 
      ```yaml
        - hostname: do.motnha.vn
-         service: http://localhost:3100
+         service: http://localhost:3110
      ```
 3. **Không** bật Cloudflare Access (trang bắt đăng nhập của Cloudflare) cho `do.motnha.vn` — máy vẽ trong Chenfeng không qua được nó. Nếu Rocket Loader đang bật cho tên miền thì tắt (Speed → Optimization). Không cần thêm quy tắc cache.
 4. Kiểm: mở `https://do.motnha.vn` trên điện thoại → thấy màn **Đăng nhập**.

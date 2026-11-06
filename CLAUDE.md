@@ -1,6 +1,6 @@
 # mn-do-hien-trang — ghi nhớ cho Claude
 
-Trang "Đo hiện trạng" của Một Nhà Design & Build (anh Thanh). Trả lời bằng tiếng Việt, ngắn. Kho RIÊNG TƯ; chạy trên máy chủ ERP (compose `-p mndo`, cổng 127.0.0.1:3100, volume `mndo_data`) — không đụng container / cổng / DB của ERP.
+Trang "Đo hiện trạng" của Một Nhà Design & Build (anh Thanh). Trả lời bằng tiếng Việt, ngắn. Kho RIÊNG TƯ; chạy trên máy chủ ERP (compose `-p mndo`, cổng 127.0.0.1:3110 → 3100 trong container, volume `mndo_data`; 3100 của máy chủ là của Paperclip / paper.motnha.vn) — không đụng container / cổng / DB của ERP.
 
 - HỢP ĐỒNG với máy vẽ (tiện ích mn-chenfeng ≥ 1.24, `src/mncf-phong.js` → `docKetNoi`, `phongDaDo`) phải khớp từng chữ. Sửa `/api/do/*` hoặc `lib/goi.js` thì chạy `test/hop-dong.test.js` (nạp mn-chenfeng THẬT qua `MNCF_PHONG`, không có thì hỏng — không bỏ qua). Không sửa tiện ích từ kho này.
 - Gói `gui` = hàm thuần `lib/goi.js` + `vendor/mncf-phong.js` (bản chép, ghi nguồn ở `vendor/mncf-phong.nguon.json`; lấy lại bằng `scripts/lay-mncf-phong.js`). Đổi thuật toán → tăng `GOI_BAN` (máy chủ tính lại mọi phòng khi khởi động). Máy chủ không tin gói điện thoại gửi.

@@ -1,4 +1,4 @@
-# Dự án compose RIÊNG (-p mndo): container mndo-app, cổng 127.0.0.1:3100, volume mndo_data, mạng mndo_net.
+# Dự án compose RIÊNG (-p mndo): container mndo-app, cổng 127.0.0.1:3110 (trong container 3100), volume mndo_data, mạng mndo_net.
 # Không trùng gì của ERP (-p motnha: motnha-app / motnha-postgres, cổng 3000 / 5432, volume postgres_data / uploads_data).
 name: mndo
 services:
@@ -8,7 +8,7 @@ services:
     container_name: mndo-app
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3100:3100"        # chỉ máy chủ này vào được; Internet vào qua Cloudflare Tunnel
+      - "127.0.0.1:3110:3100"        # chỉ máy chủ này vào được; Internet vào qua Cloudflare Tunnel. 3100 của máy chủ là của Paperclip (paper.motnha.vn)
     env_file: .env                    # do workflow ghi từ GitHub Secrets / Variables
     environment:
       - PORT=3100

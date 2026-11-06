@@ -48,5 +48,5 @@ jobs:
           docker image prune -f          # chỉ ảnh lơ lửng (dangling) — không đụng ảnh / container của ERP
       - name: Chờ sức khoẻ
         run: |
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/api/suc-khoe && exit 0; sleep 2; done
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3110/api/suc-khoe && exit 0; sleep 2; done
           docker logs --tail 80 mndo-app; exit 1
