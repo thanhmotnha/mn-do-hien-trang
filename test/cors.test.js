@@ -42,7 +42,7 @@ test('/api khác không bao giờ có ACAO; mọi /api có no-store', async () =
     const r = await goi(m, p, { origin: 'https://cfcad.cn', cookie: M.q.cookie });
     assert.equal(r.headers.get('access-control-allow-origin'), null, p); assert.equal(r.headers.get('cache-control'), 'no-store', p);
   }
-  const s = await goi('GET', '/api/suc-khoe'); assert.deepEqual(await s.json(), { ok: true, ban: '0.1.1' });
+  const s = await goi('GET', '/api/suc-khoe'); assert.deepEqual(await s.json(), { ok: true, ban: '0.2.0' });
 });
 
 test('tiêu đề bảo mật trên trang', async () => {

@@ -73,13 +73,49 @@ input::placeholder { color: var(--nhat); opacity: .8; }
 .ke .cong-cu { display: flex; gap: 6px; padding: 8px; background: #1d2320; flex-wrap: wrap; }
 .ke .cong-cu button { flex: 1 1 0; padding: 8px 6px; font-size: 15px; background: #2b332f; color: #fff; border-color: #445; }
 .ke .cong-cu button[aria-pressed="true"] { background: #e8281e; border-color: #e8281e; }
-.ke .ds-net { max-height: 22vh; overflow-y: auto; background: #1d2320; color: #fff; padding: 0 8px 8px; font-size: 15px; }
+.ke .ds-net { height: 18vh; flex: 0 0 auto; overflow-y: auto; background: #1d2320; color: #fff; padding: 0 8px 8px; font-size: 15px; }
 .ke .ds-net { list-style: none; margin: 0; }
 .ke .ds-net li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .ke .ds-net li.ghi { padding: 8px 0 4px; }
 .ke .ds-net li span { flex: 1; }
 .ke .ds-net button { flex: 0 0 auto; min-height: 44px; background: #2b332f; color: #fff; border-color: #445; }
-.ke .kinh { position: absolute; top: 8px; left: 8px; width: 120px; height: 120px; border-radius: 50%; border: 3px solid #fff; display: none; pointer-events: none; }
+.ke .kinh { position: absolute; top: 8px; left: 8px; width: 120px; height: 120px; border-radius: 50%; border: 3px solid #fff; display: none; pointer-events: none; z-index: 2; box-shadow: 0 2px 10px rgba(0,0,0,.6); }
+.ke .ds-net li.chon { background: #3a3410; border-radius: 8px; }
+.ke .ds-net i.trong { color: #b9c2bd; }
+.ke .ds-net li.goi-y small { color: #b9c2bd; }
+.ke .cong-cu button:disabled { opacity: .4; }
+.ke .o-so { position: absolute; z-index: 3; background: rgba(20,26,23,.96); color: #fff; border: 1px solid #556; border-radius: 12px; padding: 8px; max-height: 48%; overflow-y: auto; box-shadow: 0 4px 16px rgba(0,0,0,.6); }
+.ke .o-so-hang { display: flex; gap: 6px; align-items: center; }
+.ke .o-so-hang input { flex: 1 1 auto; min-width: 0; font-size: 20px; font-weight: 700; background: #fff; color: #111; }
+.ke .o-so-hang .dv { color: #b9c2bd; }
+.ke .o-so .loi-o { color: #ff9b8f; }
+.ke .o-so-lien small { display: block; color: #b9c2bd; margin: 6px 0 2px; }
+.ke .o-so .chip { background: #2b332f; color: #fff; border-color: #445; font-size: 15px; }
+.ke .o-so .chip[aria-pressed="true"] { background: #e8281e; border-color: #e8281e; }
 .ma-hien { word-break: break-all; font-family: ui-monospace, Menlo, monospace; font-size: 14px; background: var(--xam-nen); padding: 10px; border-radius: 10px; user-select: all; -webkit-user-select: all; }
 .an { display: none !important; }
 .loi-o { color: var(--do); font-size: 14px; }
+/* mặt bằng nhỏ dính trên cùng của màn phòng (đợt 1 ImageMeter: luôn thấy phòng khi gõ số) */
+.dinh { position: sticky; top: 0; z-index: 6; background: var(--nen); padding-bottom: 6px; }
+.dinh header.dau { position: static; }
+.mb.mini { position: relative; }
+.mb.mini svg { max-height: none; width: 100%; margin: 0 auto; }      /* cỡ do mbHTML đặt (caoMB): không co giãn theo số đang gõ */
+.mb .mb-to { position: absolute; right: 4px; top: 4px; min-width: 44px; min-height: 44px; padding: 4px; font-size: 20px; background: rgba(255,255,255,.85); color: #1b2420; border-color: #c9c4b8; }
+.tam .tam-mb { position: sticky; top: -14px; z-index: 2; margin: 0 0 8px; }
+.tam .tam-mb svg { max-height: none; }
+.msg .nut-lech { margin-top: 6px; }
+.msg .nut-lech button { min-height: 44px; }
+/* màn kẻ: số ước, câu hỏi khác số cũ, việc còn thiếu */
+.ke .ke-tt { background: #1d2320; color: #e8ece9; padding: 0 8px; font-size: 14px; }
+.ke .ke-tt .msg { margin: 4px 0; }
+.ke .ke-thieu { padding: 4px 0; color: #ffd98a; }
+.ke .ke-thieu.du { color: #8fe0b8; }
+.ke .ds-net i.uoc { color: #b9c2bd; }
+.ke .ds-net small.lech { color: #ffd98a; }
+.ke .o-so .o-so-lech { margin: 6px 0; }
+.ke .o-so .o-so-lech button { background: #2b332f; color: #fff; border-color: #445; }
+.ke .o-so-uoc small { display: block; color: #b9c2bd; margin: 6px 0 2px; }
+.ke .o-so-uoc button { background: #2b332f; color: #fff; border-color: #667; font-style: italic; width: 100%; }
+/* bàn phím bật khi đang gõ số trên ảnh: chỉ còn ảnh + ô số + hàng ↶ Xong (vòng soát đợt 1) */
+.ke.ban-phim > .cong-cu:first-child, .ke.ban-phim .ke-tt, .ke.ban-phim .ds-net, .ke.ban-phim > .cong-cu:last-child { display: none; }
+.ke .o-so-lech .hang + .hang { margin-top: 6px; }
