@@ -6,7 +6,7 @@
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js test/vong-soat.test.js",
-    "e2e": "node --disable-warning=ExperimentalWarning test/e2e/do.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/vong-soat.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/ke.e2e.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/goi.test.js test/hop-dong.test.js test/quyen.test.js test/cors.test.js test/vong-soat.test.js test/cua.test.js",
+    "e2e": "node --disable-warning=ExperimentalWarning test/e2e/do.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/vong-soat.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/ke.e2e.js && node --disable-warning=ExperimentalWarning test/e2e/cua.e2e.js"
   }
 }

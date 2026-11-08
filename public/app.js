@@ -4,7 +4,7 @@
  */
 (function () {
   'use strict';
-  const Ph = window.MNCFPhong, G = window.MNDOGoi;
+  const Ph = window.MNCFPhong, G = window.MNDOGoi, C = window.MNDOCua;
   const $ = (s, r) => (r || document).querySelector(s), $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const esc = v => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const g = v => String(G.rn(v, 1)).replace('.', ',');
@@ -23,8 +23,8 @@
     db: null,
     mo() {
       return new Promise((ok, hong) => {
-        const r = indexedDB.open('mndo', 1);
-        r.onupgradeneeded = () => { const d = r.result; for (const [n, k] of [['meta', 'k'], ['ct', 'id'], ['phong', 'id'], ['anh', 'id'], ['hang', 'k']]) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
+        const r = indexedDB.open('mndo', 2);      // bản 2 (0.3.0): thêm kho 'cua' — nâng chỉ THÊM kho, nháp cũ giữ nguyên
+        r.onupgradeneeded = () => { const d = r.result; for (const [n, k] of [['meta', 'k'], ['ct', 'id'], ['phong', 'id'], ['anh', 'id'], ['hang', 'k'], ['cua', 'id']]) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
         r.onsuccess = () => { DB.db = r.result; ok(); }; r.onerror = () => hong(r.error);
       });
     },
@@ -39,7 +39,7 @@
     sua(store, k, fn) {
       return new Promise((ok, hong) => { const t = DB.db.transaction(store, 'readwrite'), x = t.objectStore(store); let kq; const r = x.get(k); r.onsuccess = () => { const v = r.result; if (v === undefined) return; const m = fn(v); if (m) { kq = m; x.put(m); } }; t.oncomplete = () => ok(kq); t.onerror = () => hong(t.error); t.onabort = () => hong(t.error); });
     },
-    async xoaHet() { for (const s of ['meta', 'ct', 'phong', 'anh', 'hang']) await DB.lam(s, 'readwrite', x => x.clear()); },
+    async xoaHet() { for (const s of ['meta', 'ct', 'phong', 'anh', 'hang', 'cua']) await DB.lam(s, 'readwrite', x => x.clear()); },
   };
 
   /* ================= mạng ================= */
@@ -56,13 +56,13 @@
   /** Phiên hết giữa chừng: đang ở trong phòng / đang mở tấm hay màn kẻ thì KHÔNG cắt ngang (mất nét, mất số đang gõ) — chỉ báo ở thanh; đóng tấm / bấm thanh mới sang đăng nhập. */
   function canDangNhap() {
     if (!S.toi) return; S.toi = null;
-    if (/^#\/ph\//.test(location.hash) || lop.innerHTML) { S.can_dn = true; capThanh(); return; }
+    if (/^#\/(ph|cua)\//.test(location.hash) || lop.innerHTML) { S.can_dn = true; capThanh(); return; }
     veDangNhap(BAO_HET_PHIEN);
   }
   function dangNhapLai() { S.can_dn = false; Promise.resolve(luuNgay()).catch(() => null).then(() => veDangNhap(BAO_HET_PHIEN)); }
 
   /* ================= hàng đợi gửi ================= */
-  const TH = { ct: 0, phong: 1, anh: 2, xoa: 3 };
+  const TH = { ct: 0, phong: 1, cua: 1, anh: 2, xoa: 3, xoa_cua: 3 };
   async function xepHang(loai, id) { await DB.put('hang', { k: loai + ':' + id, loai, id, th: TH[loai], lan: 0, cho_den: 0, dung: '' }); capThanh(); henChay(200); }
   let henC = 0; function henChay(ms) { clearTimeout(henC); henC = setTimeout(() => chayHang().catch(e => console.error(e)), ms); }
   const LUI = [5000, 15000, 60000, 300000];
@@ -72,10 +72,10 @@
     try {
       for (;;) {
         const ds = (await DB.all('hang')).filter(j => !j.dung).sort((a, b) => a.th - b.th);
-        const conPhong = new Set(ds.filter(j => j.loai === 'phong').map(j => j.id));
+        const conPhong = new Set(ds.filter(j => j.loai === 'phong').map(j => j.id)), conCua = new Set(ds.filter(j => j.loai === 'cua').map(j => j.id));
         const anhJ = ds.filter(j => j.loai === 'anh');
         S.dang_gui.tong = Math.max(S.dang_gui.tong, S.dang_gui.anh + anhJ.length);
-        const j = ds.find(x => x.cho_den <= Date.now() && !(x.loai === 'anh' && conPhong.has(x.phong)));
+        const j = ds.find(x => x.cho_den <= Date.now() && !(x.loai === 'anh' && (x.cua ? conCua.has(x.cua) : conPhong.has(x.phong))));
         if (!j) break;
         if (j.loai === 'anh') { S.dang_gui.anh++; capThanh(); }
         let kq;
@@ -131,17 +131,26 @@
     }
     if (j.loai === 'anh') {
       const a = await DB.get('anh', j.id); if (!a || !a.blob) return 'xong';
-      const r = await api('PUT', '/api/anh/' + a.id, a.blob, { 'content-type': 'image/jpeg', 'x-phong': a.phong });
+      // ảnh của mục "Cửa & vách kính" mang `cua` (tiêu đề X-Cua), ảnh phòng mang `phong` (X-Phong)
+      const kho = a.cua ? 'cua' : 'phong', cuaId = a.cua || a.phong;
+      const r = await api('PUT', '/api/anh/' + a.id, a.blob, Object.assign({ 'content-type': 'image/jpeg' }, a.cua ? { 'x-cua': a.cua } : { 'x-phong': a.phong }));
       if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
-      if (r.ok || r.st === 409) { a.len = Date.now(); await DB.put('anh', a); const p = await DB.sua('phong', a.phong, m => { m.anh_co = Array.from(new Set((m.anh_co || []).concat(a.id))); return m; }); if (p && S.rec && S.rec.id === p.id) S.rec.anh_co = p.anh_co; return 'xong'; }
-      if (r.st === 410) { await boAnhMay(a.id); return 'xong'; }      // phòng / công trình đã xoá trên máy chủ: thôi gửi
+      if (r.ok || r.st === 409) { a.len = Date.now(); await DB.put('anh', a); const p = await DB.sua(kho, cuaId, m => { m.anh_co = Array.from(new Set((m.anh_co || []).concat(a.id))); return m; }); if (p && S.rec && S.rec.id === p.id) S.rec.anh_co = p.anh_co; return 'xong'; }
+      if (r.st === 410) { await boAnhMay(a.id); return 'xong'; }      // phòng / mục cửa / công trình đã xoá trên máy chủ: thôi gửi
       if (r.st === 404) {
-        const p = await DB.get('phong', a.phong), conKhai = p && p.anh.some(x => x.id === a.id);
-        if (!conKhai) { await boAnhMay(a.id); return 'xong'; }      // ảnh không còn trong phòng ở máy này nữa
-        if (await DB.get('hang', 'phong:' + a.phong)) { const e = new Error('chờ gửi phòng'); e.st = 503; throw e; }      // phòng còn chờ gửi / chờ chọn bản: lùi lại
-        await xepHang('phong', a.phong); return 'giu';      // máy chủ thiếu phòng / thiếu khai ảnh: gửi lại phòng (kèm ảnh) trước
+        const p = await DB.get(kho, cuaId), conKhai = p && p.anh.some(x => x.id === a.id);
+        if (!conKhai) { await boAnhMay(a.id); return 'xong'; }      // ảnh không còn trong phòng / mục ở máy này nữa
+        if (await DB.get('hang', kho + ':' + cuaId)) { const e = new Error('chờ gửi ' + kho); e.st = 503; throw e; }      // còn chờ gửi / chờ chọn bản: lùi lại
+        await xepHang(kho, cuaId); return 'giu';      // máy chủ thiếu phòng / mục / thiếu khai ảnh: gửi lại (kèm ảnh) trước
       }
       await dungViec(j, r.j.error || 'Máy chủ không nhận ảnh'); return 'dung';
+    }
+    if (j.loai === 'cua') return guiCua(j);
+    if (j.loai === 'xoa_cua') {
+      const r = await api('DELETE', '/api/cua/' + j.id);
+      if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
+      if (r.ok || r.st === 404) return 'xong';
+      await dungViec(j, r.j.error || 'Máy chủ không xoá mục cửa'); return 'dung';
     }
     if (j.loai === 'xoa') {
       const r = await api('DELETE', '/api/phong/' + j.id);
@@ -243,6 +252,7 @@ ${bao ? `<div class="msg vang">${esc(bao)}</div>` : ''}
     const h = location.hash.replace(/^#\/?/, '').split('/');
     if (h[0] === 'ct' && h[1]) return veCongTrinh(h[1]);
     if (h[0] === 'ph' && h[1]) return vePhong(h[1]);
+    if (h[0] === 'cua' && h[1]) return veCua(h[1]);
     if (h[0] === 'ql' && h[1] === 'tk' && S.toi.vai === 'quan_ly') return veTaiKhoan();
     if (h[0] === 'ql' && h[1] === 'ma' && S.toi.vai === 'quan_ly') return veMa();
     return veDanhSach();
@@ -257,7 +267,11 @@ ${bao ? `<div class="msg vang">${esc(bao)}</div>` : ''}
   const di = h => { if (location.hash === h) dinhTuyen(); else location.hash = h; };
 
   /* ================= công trình ================= */
-  async function hangCua() { const ds = await DB.all('hang'); return { ct: new Set(ds.filter(j => j.loai === 'ct').map(j => j.id)), phong: new Set(ds.filter(j => j.loai !== 'ct' && j.loai !== 'xoa').map(j => j.loai === 'anh' ? j.phong : j.id)), xoa: new Set(ds.filter(j => j.loai === 'xoa').map(j => j.id)) }; }
+  async function hangCua() {
+    const ds = await DB.all('hang');
+    return { ct: new Set(ds.filter(j => j.loai === 'ct').map(j => j.id)), phong: new Set(ds.filter(j => j.loai === 'phong' || (j.loai === 'anh' && j.phong)).map(j => j.loai === 'anh' ? j.phong : j.id)), xoa: new Set(ds.filter(j => j.loai === 'xoa').map(j => j.id)),
+      cua: new Set(ds.filter(j => j.loai === 'cua' || (j.loai === 'anh' && j.cua)).map(j => j.loai === 'anh' ? j.cua : j.id)), xoa_cua: new Set(ds.filter(j => j.loai === 'xoa_cua').map(j => j.id)) };
+  }
   async function veDanhSach() {
     const ql = S.toi.vai === 'quan_ly';
     app.innerHTML = `<header class="dau"><h1>Công trình</h1><button data-act="menu" aria-label="Tài khoản">☰</button></header>
@@ -270,7 +284,7 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
       if (r.ok) {
         const ds = await DB.all('ct'), hang = await hangCua();
         const tren = new Set(r.j.cong_trinh.map(c => c.id));
-        for (const c of r.j.cong_trinh) { const cu = ds.find(x => x.id === c.id); if (!cu || !hang.ct.has(c.id)) await DB.put('ct', Object.assign(cu || {}, { id: c.id, ten: c.ten, dia_chi: c.dia_chi, ngay: c.ngay, nguoi_do: c.nguoi_do, tren_may: true, so_phong: c.so_phong, so_xong: c.so_xong, sua_luc: c.sua_luc, cua_toi: c.cua_toi !== false })); }
+        for (const c of r.j.cong_trinh) { const cu = ds.find(x => x.id === c.id); if (!cu || !hang.ct.has(c.id)) await DB.put('ct', Object.assign(cu || {}, { id: c.id, ten: c.ten, dia_chi: c.dia_chi, ngay: c.ngay, nguoi_do: c.nguoi_do, tren_may: true, so_phong: c.so_phong, so_xong: c.so_xong, so_cua: c.so_cua || 0, so_cua_xong: c.so_cua_xong || 0, sua_luc: c.sua_luc, cua_toi: c.cua_toi !== false })); }
         for (const c of ds) if (c.tren_may && !tren.has(c.id) && !hang.ct.has(c.id)) await DB.del('ct', c.id);      // đã xoá / lưu trữ ở máy khác
         if (location.hash.replace(/^#\/?/, '') === '') await veDsCt();
       }
@@ -278,13 +292,15 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
   }
   async function veDsCt() {
     const el = $('[data-ui="ds-ct"]'); if (!el) return;
-    const ds = await DB.all('ct'), ph = await DB.all('phong'), hang = await hangCua();
+    const ds = await DB.all('ct'), ph = await DB.all('phong'), cuas = await DB.all('cua'), hang = await hangCua();
     ds.sort((a, b) => (b.sua_luc || b.tao_may || 0) - (a.sua_luc || a.tao_may || 0));
     el.innerHTML = ds.length ? ds.map(c => {
       const cua = ph.filter(p => p.ct === c.id), moi = cua.filter(p => !p.rev);
       const n = Math.max(c.so_phong || 0, cua.length) + (c.so_phong >= cua.length ? moi.length : 0), x = Math.max(c.so_xong || 0, cua.filter(p => p.xong).length);
-      const cho = hang.ct.has(c.id) || cua.some(p => hang.phong.has(p.id));
-      return `<li><button data-act="di" data-h="#/ct/${esc(c.id)}"><b>${esc(c.ten)}${cho ? '<span class="cham" title="Còn thay đổi chưa gửi"></span>' : ''}</b><small>${esc([c.dia_chi, c.ngay, c.nguoi_do].filter(Boolean).join(' · '))}</small><small>${x}/${n} phòng xong</small></button></li>`;
+      const cu = cuas.filter(q => q.ct === c.id), cmoi = cu.filter(q => !q.rev).length;
+      const nc = Math.max(c.so_cua || 0, cu.length) + ((c.so_cua || 0) >= cu.length ? cmoi : 0), xc = Math.max(c.so_cua_xong || 0, cu.filter(q => q.cua.xong).length);
+      const cho = hang.ct.has(c.id) || cua.some(p => hang.phong.has(p.id)) || cu.some(q => hang.cua.has(q.id));
+      return `<li><button data-act="di" data-h="#/ct/${esc(c.id)}"><b>${esc(c.ten)}${cho ? '<span class="cham" title="Còn thay đổi chưa gửi"></span>' : ''}</b><small>${esc([c.dia_chi, c.ngay, c.nguoi_do].filter(Boolean).join(' · '))}</small><small>${x}/${n} phòng xong${nc ? ` · ${xc}/${nc} cửa xong` : ''}</small></button></li>`;
     }).join('') : '<li class="nhat">Chưa có công trình nào — bấm “+ Công trình mới”.</li>';
   }
   const laIOSChuaCai = () => /iphone|ipad/i.test(navigator.userAgent) && !navigator.standalone;
@@ -312,9 +328,14 @@ ${ql ? '<div class="hang"><button data-act="di" data-h="#/ql/tk">Tài khoản th
 <p class="nhat">${esc([c.dia_chi, c.ngay, c.nguoi_do].filter(Boolean).join(' · '))}</p>
 <ul class="ds" data-ui="ds-ph"></ul>
 <p><button class="chinh to" data-act="ph-moi" data-id="${esc(id)}">+ Phòng mới</button></p>
+<h2>Cửa &amp; vách kính <small class="nhat">(đo để đặt hàng)</small></h2>
+<ul class="ds" data-ui="ds-cua"></ul>
+<p><button class="chinh to" data-act="cua-them" data-id="${esc(id)}">+ Thêm cửa / vách kính</button></p>
+<p><button class="to" data-act="cua-phieu" data-id="${esc(id)}">🧾 Phiếu đo cửa (in / CSV)</button></p>
 ${chu ? `<div class="hang" style="margin-top:28px"><button data-act="ct-luu-tru" data-id="${esc(id)}">Lưu trữ công trình</button><button class="do" data-act="ct-xoa" data-id="${esc(id)}">Xoá công trình</button></div>
 <p class="nhat"><small>Lưu trữ: máy vẽ thôi thấy các phòng của công trình này (bỏ lưu trữ được).</small></p>` : '<p class="nhat"><small>Công trình của thợ khác: bạn đo thêm phòng được; sửa / lưu trữ / xoá là việc của người tạo hoặc quản lý.</small></p>'}`;
-    await veDsPh(id);
+    await veDsPh(id); await veDsCua(id);
+    dongBoCua(id).catch(() => null);
     try {
       const r = await api('GET', `/api/cong-trinh/${id}/phong`);
       if (r.ok) {
@@ -468,14 +489,17 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
   const laUoc = k => !!k && (k.nguon === 'uoc' || /^\s*≈/.test(String(k.text || '')));
   /** Số THỢ ĐÃ GÕ ở ô của phòng (không tính số máy suy, không tính trần điền sẵn) — null = ô trống. */
   function giaTriTho(lien, rec) {
-    rec = rec || S.rec; const p = rec.phong, m = LIEN_RE.exec(String(lien || '')); if (!m) return null;
+    rec = rec || S.rec;
+    if (rec.la_cua) { const v = layD(rec.cua, String(lien || '')); return typeof v === 'number' && isFinite(v) && v > 0 ? v : null; }
+    const p = rec.phong, m = LIEN_RE.exec(String(lien || '')); if (!m) return null;
     if (m[1] === 'tuong') { const t = p.tuong[+m[2]]; if (!t) return null; if (m[3] === 'dai') return t.dai > 0 ? t.dai : null; if (m[3] === 'cao') return t.cao > 0 ? t.cao : p.cao > 0 && !rec.cao_san ? p.cao : null; return null; }
     const x = (p[m[1]] || []).find(q => q && q.id === m[2]); if (!x) return null;
     const v = x[m[3]]; return typeof v === 'number' && isFinite(v) ? v : null;
   }
   /** Tên ô của phòng mà đoạn gắn vào: "Dài tường A", "Cao trần", "Cửa đi 1 rộng". */
   function tenLien(lien, rec, A) {
-    rec = rec || S.rec; const p = rec.phong, m = LIEN_RE.exec(String(lien || '')); if (!m) return '';
+    rec = rec || S.rec; if (rec.la_cua) return tenCuaLien(lien);
+    const p = rec.phong, m = LIEN_RE.exec(String(lien || '')); if (!m) return '';
     if (m[1] === 'tuong') { const t = p.tuong[+m[2]]; if (!t) return ''; return m[3] === 'dai' ? `Dài tường ${t.ten}` : t.cao > 0 ? `Cao tường ${t.ten}` : 'Cao trần'; }
     const j = (p[m[1]] || []).findIndex(q => q && q.id === m[2]), ten = j >= 0 && (A || phanTich(rec)).ten[m[1]][j];
     return ten ? `${ten.ten} ${G.TEN_O[m[3]] || m[3]}` : '';
@@ -641,8 +665,9 @@ ${ds.length ? `<h2>Chi tiết trên tường ${esc(t.ten)}</h2>${ds.join('')}` :
     clearTimeout(S.hen); S.hen = 0;
     if (!S.rec || !S.rec.ban) return;
     const r = S.rec; delete r.ban; r.dem = (r.dem || 0) + 1;
-    await DB.put('phong', r);
-    await DB.put('hang', { k: 'phong:' + r.id, loai: 'phong', id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
+    const kho = r.la_cua ? 'cua' : 'phong';      // S.rec là phòng HOẶC mục "Cửa & vách kính" đang mở
+    await DB.put(kho, r);
+    await DB.put('hang', { k: kho + ':' + r.id, loai: kho, id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
     capThanh(); henChay(300);
   }
   const doi = () => { S.rec.ban = true; henLuu(); };
@@ -791,7 +816,7 @@ ${o}
   async function veAnhs() {
     if (!S.rec) return;
     for (const el of $$('[data-anh]')) {
-      const t = el.dataset.anh === '' ? null : +el.dataset.anh, ds = S.rec.anh.filter(a => a.tuong === t);
+      const t = el.dataset.anh === '' ? null : +el.dataset.anh, ds = S.rec.anh.filter(a => (a.tuong === undefined ? null : a.tuong) === t);
       const co = new Set(S.rec.anh_co || []);
       const ht = await Promise.all(ds.map(async a => `<button data-act="ke" data-id="${esc(a.id)}" aria-label="Kẻ số lên ảnh"><img alt="" src="${esc(await srcAnh(a.id))}"><span class="nhan" data-nhan-anh="${esc(a.id)}">${esc(nhanAnh(a))}${co.has(a.id) ? '' : ' · chưa gửi'}</span></button>`));
       el.innerHTML = ht.join('');
@@ -799,7 +824,7 @@ ${o}
   }
   /** Nhãn ảnh thu nhỏ (1.9): "3 kích thước · 1 ghi chú" — không bao giờ "0 nét" (thợ không hiểu "nét"). */
   function nhanAnh(a) {
-    const ke = a.ke || [], kt = ke.filter(k => k.loai === 'kt'), A = phanTich(S.rec), lv = l => G.giaTriLien(l, S.rec.phong, A.gui.phong);
+    const ke = a.ke || [], kt = ke.filter(k => k.loai === 'kt'), lv = lienCua();
     // "kích thước" = số ĐO THẬT; số ước, số máy suy / trần điền sẵn (đoạn chỉ gắn ô) đếm riêng
     const co = kt.filter(k => soDo(k, S.rec) > 0).length, uoc = kt.filter(k => laUoc(k) && soDoan(k, lv) > 0).length, chua = kt.length - co - uoc, gc = ke.length - kt.length;
     if (!ke.length) return 'Chưa kẻ số — chạm để kẻ';
@@ -825,7 +850,7 @@ ${o}
     for (const tep of ds) {
       try {
         const n = await nen(tep), id = idMoi('an');
-        await DB.put('anh', { id, phong: r.id, blob: n.blob, w: n.w, h: n.h, len: 0, luc: Date.now() });
+        await DB.put('anh', Object.assign({ id, blob: n.blob, w: n.w, h: n.h, len: 0, luc: Date.now() }, r.la_cua ? { cua: r.id } : { phong: r.id }));
         r.anh.push({ id, tuong: chupCho, w: n.w, h: n.h, ghi: '', ke: [] });
         if (!dau) dau = id;
       } catch (e) { alertNho(e.message); }
@@ -894,7 +919,7 @@ ${o}
   }
   window.addEventListener('resize', () => { if (K.cv && K.cv.isConnected) { capBanPhim(); doiCoKe(); } });
   if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (K.cv && K.cv.isConnected) { capBanPhim(); doiCoKe(); } });
-  const lienCua = () => { const A = phanTich(S.rec); return l => G.giaTriLien(l, S.rec.phong, A.gui.phong); };
+  const lienCua = () => { if (S.rec.la_cua) { const r = S.rec; return l => giaTriTho(l, r); } const A = phanTich(S.rec); return l => G.giaTriLien(l, S.rec.phong, A.gui.phong); };
   const layLV = () => K.lv || (K.lv = lienCua());
   function veNet(x, v) {      // y như anhCoNet của máy vẽ: nét trắng dày rồi đỏ, nhãn nền đỏ chữ trắng
     x.lineCap = 'round';
@@ -995,9 +1020,10 @@ ${o}
   /** Dòng việc của màn kẻ (1.9): "Tường A còn thiếu: …", số ước lệch số đo, đổi mét → mm. */
   function veKeTT() {
     const el = $('[data-ui="ke-tt"]', lop); if (!el || !S.rec) return;
-    const L = [], r = S.rec, p = r.phong, i = K.a.tuong, A = phanTich(r);
+    const L = [], r = S.rec, p = r.phong, i = K.a.tuong, A = r.la_cua ? null : phanTich(r);
     if (K.baoM) L.push(`<div class="msg vang">${esc(K.baoM)}</div>`);
-    if (Number.isInteger(i) && p.tuong[i]) {
+    if (r.la_cua) L.push(`<div class="ke-thieu${C.tinh(r.cua).muc === 'ok' ? ' du' : ''}" data-ui="ke-thieu">${esc(tomCua(r.cua))}</div>`);
+    else if (Number.isInteger(i) && p.tuong[i]) {
       const t = p.tuong[i], thieu = [];
       if (!(t.dai > 0)) thieu.push(`Dài tường ${t.ten}${A.suy[i] ? ` (máy đang suy ≈${nghin(A.suy[i])})` : ''}`);
       if (!(t.cao > 0) && (!(p.cao > 0) || r.cao_san)) thieu.push('Cao trần');
@@ -1025,9 +1051,9 @@ ${o}
     n('ke-lui', K.ls.length > 0); n('ke-lam-lai', K.rs.length > 0); n('ke-bo-chon', K.sel >= 0 && !!K.ke[K.sel]);
   }
   /* --- hoàn tác / làm lại (1.7): ảnh chụp trạng thái nét + số của phòng (gõ số trên đoạn liên kết sửa cả số phòng) --- */
-  const chupK = () => ({ ke: JSON.stringify(K.ke), ph: JSON.stringify(S.rec.phong), cs: !!S.rec.cao_san });
+  const chupK = () => ({ ke: JSON.stringify(K.ke), ph: JSON.stringify(S.rec.la_cua ? S.rec.cua : S.rec.phong), cs: !!S.rec.cao_san });
   function ghiBuoc(b) { K.ls.push(b || chupK()); if (K.ls.length > LS_MAX) K.ls.shift(); K.rs = []; }
-  function apBuoc(b) { K.ke = JSON.parse(b.ke); if (b.ph !== JSON.stringify(S.rec.phong)) S.rec.phong = JSON.parse(b.ph); if (b.cs) S.rec.cao_san = true; else delete S.rec.cao_san; K.sel = -1; K.lv = null; }
+  function apBuoc(b) { K.ke = JSON.parse(b.ke); const kh = S.rec.la_cua ? 'cua' : 'phong'; if (b.ph !== JSON.stringify(S.rec[kh])) S.rec[kh] = JSON.parse(b.ph); if (S.rec.la_cua) { K.sel = -1; K.lv = null; return; } if (b.cs) S.rec.cao_san = true; else delete S.rec.cao_san; K.sel = -1; K.lv = null; }
   function hoanTac(lai) {
     dongSo(); const tu = lai ? K.rs : K.ls, sang = lai ? K.ls : K.rs; if (!tu.length) return;
     sang.push(chupK()); apBuoc(tu.pop()); xongNet();
@@ -1153,16 +1179,16 @@ ${o}
   function veO(gt) {
     const el = $('[data-ui="o-so"]', lop), k = K.o !== null ? K.ke[K.o] : null; if (!el || !k) return;
     const cu = $('[data-ui="o-so-nhap"]', el), dangGo = cu && document.activeElement === cu, val = gt !== undefined ? gt : cu ? cu.value : soHien(k);
-    const loiCu = ($('[data-ui="o-so-loi"]', el) || {}).textContent || '', p = S.rec.phong;
-    const A = phanTich(S.rec), tuongs = Number.isInteger(K.a.tuong) && p.tuong[K.a.tuong] ? [K.a.tuong] : p.tuong.map((t, j) => j);
-    const ds = []; for (const j of tuongs) for (const s of G.soCuaTuong(p, j, Ph, A.gui.phong)) ds.push(s);
-    const nhanChip = s => { const m = /^tuong:(\d+):cao$/.exec(s.lien), t = m && p.tuong[+m[1]]; if (t && !(t.cao > 0)) return `Cao trần ${s.gia === null ? '(chưa có)' : S.rec.cao_san ? g(s.gia) + ' (điền sẵn)' : g(s.gia)}`; return `${s.nhan} ${s.gia === null ? '(chưa có)' : g(s.gia)}`; };
+    const loiCu = ($('[data-ui="o-so-loi"]', el) || {}).textContent || '', p = S.rec.phong, laC = !!S.rec.la_cua;
+    const A = laC ? null : phanTich(S.rec), tuongs = laC ? [] : Number.isInteger(K.a.tuong) && p.tuong[K.a.tuong] ? [K.a.tuong] : p.tuong.map((t, j) => j);
+    const ds = laC ? dsLienCua(S.rec.cua) : []; for (const j of tuongs) for (const s of G.soCuaTuong(p, j, Ph, A.gui.phong)) ds.push(s);
+    const nhanChip = s => { if (laC) return `${s.nhan} ${s.gia === null ? '(chưa có)' : g(s.gia)}`; const m = /^tuong:(\d+):cao$/.exec(s.lien), t = m && p.tuong[+m[1]]; if (t && !(t.cao > 0)) return `Cao trần ${s.gia === null ? '(chưa có)' : S.rec.cao_san ? g(s.gia) + ' (điền sẵn)' : g(s.gia)}`; return `${s.nhan} ${s.gia === null ? '(chưa có)' : g(s.gia)}`; };
     const uoc = !soHien(k) && K.uoc ? K.uoc.m.get(k) : 0, c = K.oCho, tenC = c ? tenLien(c.lien, S.rec, A) : '';
     el.innerHTML = `<div class="o-so-hang"><input data-ui="o-so-nhap" inputmode="decimal" enterkeyhint="done" autocomplete="off" aria-label="Số đo của đoạn (mm)" placeholder="${uoc ? esc('≈' + nghin(uoc) + ' (ước)') : 'gõ số mm'}" value="${esc(val)}"${loiCu ? ' aria-invalid="true"' : ''}><span class="dv">mm</span><button class="chinh" data-act="so-xong" aria-label="Xong số">✓</button></div>
 <div class="loi-o" data-ui="o-so-loi">${esc(loiCu)}</div>
 ${c ? `<div class="msg vang o-so-lech" data-ui="o-so-lech">${esc(tenC)} đang là ${esc(nghin(c.o))}, số trên ảnh ${esc(nghin(c.v))} — khác ${esc(nghin(Math.abs(c.o - c.v)))} mm.<div class="hang"><button data-act="so-dung-anh">Dùng số ảnh</button><button data-act="so-giu-cu">Giữ số cũ</button></div><div class="hang"><button data-act="so-khong-gan">Không phải ${esc(tenC)}</button></div></div>` : ''}
 ${uoc ? `<div class="o-so-uoc"><small>Số ƯỚC theo đoạn đã có số (chỉ đúng với ảnh chụp thẳng) — chỉ ghi lên ảnh, KHÔNG vào số của phòng:</small><button data-act="so-dung-uoc" data-v="${uoc}">Ghi số ước ≈${esc(nghin(uoc))} lên ảnh</button></div>` : ''}
-${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? `Gợi ý: đoạn ngang đầu tiên = ${esc(tenLien(K.oGoiY, S.rec, A))} (vào phòng khi bấm ✓ / Enter) — sai thì chạm ô khác bên dưới.` : 'Đoạn này là số nào của phòng? (sửa số phòng thì ảnh đổi theo)'}</small><div>${ds.map(s => `<button class="chip" data-act="chon-lien" data-lien="${esc(s.lien)}" aria-pressed="${K.oLien === s.lien}">${esc(nhanChip(s))}</button>`).join('')}<button class="chip" data-act="chon-lien" data-lien="" aria-pressed="${K.oLien === ''}">Không gắn</button></div></div>` : ''}`;
+${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? `Gợi ý: đoạn ngang đầu tiên = ${esc(tenLien(K.oGoiY, S.rec, A))} (vào phòng khi bấm ✓ / Enter) — sai thì chạm ô khác bên dưới.` : (laC ? `Đoạn này là số nào của ${esc(S.rec.cua.ky_hieu)}? (sửa số ở thẻ thì ảnh đổi theo)` : 'Đoạn này là số nào của phòng? (sửa số phòng thì ảnh đổi theo)')}</small><div>${ds.map(s => `<button class="chip" data-act="chon-lien" data-lien="${esc(s.lien)}" aria-pressed="${K.oLien === s.lien}">${esc(nhanChip(s))}</button>`).join('')}<button class="chip" data-act="chon-lien" data-lien="" aria-pressed="${K.oLien === ''}">Không gắn</button></div></div>` : ''}`;
     if (dangGo) { const o = $('[data-ui="o-so-nhap"]', el); if (o) { o.focus(); const n = o.value.length; try { o.setSelectionRange(n, n); } catch (e) { /* bỏ qua */ } } }
   }
   /**
@@ -1170,6 +1196,7 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
    * và chưa ảnh KHÁC nào của tường X gắn "Dài tường X" (ảnh thứ hai của cùng tường thường chụp cửa / chi tiết — gợi ý lại là sai).
    */
   function goiYLien(i) {
+    if (S.rec.la_cua) return '';
     const t = K.a.tuong, k = K.ke[i]; if (!Number.isInteger(t) || !S.rec.phong.tuong[t] || !k || !k.b) return '';
     const ngang = q => q.loai === 'kt' && q.a && q.b && Math.abs(q.b[1] - q.a[1]) <= Math.abs(q.b[0] - q.a[0]) * Math.tan(20 * Math.PI / 180);
     const L = `tuong:${t}:dai`;
@@ -1206,12 +1233,14 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
   const NGAM = { ngam: true, roi: true }, ROI = { ngam: true, roi: true, bo: true };
   /** Đọc ô của phòng mà đoạn sắp ghi vào (để trả lại khi đoạn thôi gắn ô đó). */
   function chupO(lien) {
+    if (S.rec.la_cua) { const v = layD(S.rec.cua, String(lien || '')); return v === undefined ? null : { lien, v }; }
     const r = S.rec, p = r.phong, m = LIEN_RE.exec(String(lien || '')); if (!m) return null;
     if (m[1] === 'tuong') { const t = p.tuong[+m[2]]; if (!t) return null; if (m[3] === 'dai') return { lien, v: t.dai, dc: t.dai_cu }; if (t.cao > 0) return { lien, tc: t.cao }; return { lien, pc: p.cao, cs: !!r.cao_san }; }
     const x = (p[m[1]] || []).find(q => q && q.id === m[2]); if (!x) return null;
     return { lien, v: x[m[3]] === undefined ? null : x[m[3]] };
   }
   function traO(c) {
+    if (S.rec.la_cua) { if (c && c.lien) datD(S.rec.cua, c.lien, c.v === undefined ? null : c.v); K.lv = null; return; }
     const r = S.rec, p = r.phong, m = LIEN_RE.exec(String(c && c.lien || '')); if (!m) return;
     if (m[1] === 'tuong') {
       const t = p.tuong[+m[2]]; if (!t) return;
@@ -1295,6 +1324,7 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
   }
   /** Đoạn liên kết: số gõ trên ảnh ghi vào đúng ô số của phòng (Dài tường, Rộng cửa…). k: đoạn ghi — nhớ số trước khi gắn (k.truoc) để thôi gắn thì trả lại. */
   function ghiLien(lien, v, k) {
+    if (S.rec.la_cua) { if (!C.lienCua(S.rec.cua.nhom).has(lien)) return; if (k && !(k.truoc && k.truoc.lien === lien)) { const c = chupO(lien); if (c) k.truoc = c; } datD(S.rec.cua, lien, v); K.lv = null; return; }
     const m = LIEN_RE.exec(String(lien || '')), p = S.rec.phong; if (!m) return;
     if (k && !(k.truoc && k.truoc.lien === lien)) { const c = chupO(lien); if (c) k.truoc = c; }
     if (m[1] === 'tuong') { const t = p.tuong[+m[2]]; if (!t) return; if (m[3] === 'dai') { t.dai = v; delete t.dai_cu; } else if (m[3] === 'cao') { if (t.cao > 0) t.cao = v; else { p.cao = v; delete S.rec.cao_san; } } }
@@ -1321,12 +1351,390 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
     const a = S.rec && S.rec.anh.find(x => x.id === b.dataset.id), k = a && (a.ke || [])[+b.dataset.k]; if (!k || !k.lien) return;
     if (dungAnh) { ghiLien(k.lien, k.so, k); delete k.lech; }
     else { const o = giaTriTho(k.lien); if (o === null) return; k.so = o; k.text = chuGo(o); delete k.lech; }
-    doi(); veTuongs(); capPhanTich(); veAnhs();
+    doi(); if (S.rec.la_cua) { veCuaThan(); return; } veTuongs(); capPhanTich(); veAnhs();
   }
   function luuKe() {
     giuKe(ROI);
     K.a.ke = K.ke; K.cv = null; doi(); luuNgay(); dongTam();
+    if (S.rec.la_cua) { veCuaThan(); return; }
     veTuongs(); veAnhs(); capPhanTich();
+  }
+
+  /* ================= CỬA & VÁCH KÍNH (0.3.0) =================
+   * Danh sách RIÊNG của công trình (đặt hàng / sản xuất), thợ tự thêm tay — KHÔNG gắn với lỗ cửa trong phòng, KHÔNG vào gói của máy vẽ.
+   * Ba nhóm: cửa gỗ thông phòng (go), cửa nhôm – cửa sổ nhôm (nhom, khối riêng `nhom_ct`), vách kính tắm (kinh, đo theo từng mặt).
+   * Dạng dữ liệu, phép soát, số đặt hàng (số NHỎ NHẤT của 3 điểm) và cảnh báo: lib/cua.js (C = window.MNDOCua) — cùng một phép tính với máy chủ.
+   * Bản ghi trong máy (kho 'cua'): { id, ct, la_cua: true, cua, anh, rev, dem, tao_may, anh_co, sua_luc, xoa_duoc, xung_dot?, loi_gui? }.
+   * Đường tới một ô số: chuỗi `lien` của lib/cua.js ('rong.0', 'go.cot_san', 'kinh.mat.1.rong.2') — ô nhập mang data-c = đường đó, đoạn trên ảnh gắn đúng chuỗi đó.
+   */
+  const layD = (o, d) => String(d).split('.').reduce((x, k) => (x === null || x === undefined ? undefined : x[k]), o);
+  function datD(o, d, v) {
+    const ks = String(d).split('.'); let x = o;
+    for (let i = 0; i < ks.length - 1; i++) { const k = ks[i]; if (x[k] === null || x[k] === undefined || typeof x[k] !== 'object') x[k] = /^\d+$/.test(ks[i + 1]) ? [] : {}; x = x[k]; }
+    x[ks[ks.length - 1]] = v;
+  }
+  // trần riêng của vài ô (lib/cua.js soát: cốt sàn / tường nghiêng ≤ 1000, kính ≤ 100) — gõ quá thì đỏ ở ô, gửi đi là ô trống (máy chủ từ chối CẢ mục vì một ô)
+  const CUA_MAX = { 'go.cot_san': 1000, 'kinh.nghieng.trai': 1000, 'kinh.nghieng.phai': 1000, 'nhom_ct.kinh_day': 100, 'kinh.kinh_day': 100 };
+  const CUA_CHU = { ky_hieu: 12, vi_tri: 80, chat_lieu: 80, mau: 60, phu_kien: 200, ghi_chu: 500, 'go.kieu_khac': 40, 'nhom_ct.he': 40, 'nhom_ct.tang_ghi': 80, 'kinh.doc': 80, 'kinh.vat': 300 };
+  const KY_RE = /^[\p{L}\p{N} ._/#-]{1,12}$/u;
+  const NHOM_ICON = { go: '🚪', nhom: '🪟', kinh: '🚿' };
+  const NHOM_GIAI = { go: 'cửa phòng ngủ, WC, cửa chính gỗ — khuôn, ốp chỉ', nhom: 'cửa đi / cửa sổ / vách nhôm kính (Xingfa, PMI…)', kinh: 'vách tắm thẳng / góc L / chữ U / cửa lùa' };
+  const MAT_CAN = { thang: 1, goc_l: 2, chu_u: 3, lua: 1 };
+  function cuaMoi(nhom, ky) {
+    const c = { nhom, ky_hieu: ky, vi_tri: '', so_luong: 1, rong: [null, null, null], cao: [null, null, null], cheo: [null, null], chat_lieu: '', mau: '', phu_kien: '', ghi_chu: '', xong: false };
+    if (nhom === 'go') c.go = { day_tuong: [null, null], san: null, cot_san: null, kieu: null, kieu_khac: '', ban_le: null, mo: null, lua: null, op_chi: null };
+    else if (nhom === 'nhom') c.nhom_ct = { loai: null, be: null, day_tuong: [null, null], lap: null, he: '', kieu_mo: null, so_canh: null, ban_le: null, mo: null, kinh_day: null, kinh_loai: null, fix: null, fix_tren: null, fix_duoi: null, tang_cao: false, tang_ghi: '' };
+    else c.kinh = { dang: null, mat: [{ rong: [null, null, null], cao: [null, null, null] }], nghieng: { trai: null, phai: null }, bac: { co: null, cao: null, rong: null }, doc: '', cua: { kieu: null, rong: null, mo: null, ban_le_ben: null, ban_le: null }, kinh_day: 10, kinh_loai: null, pk_mau: null, vat: '' };
+    return c;
+  }
+  async function kyMoi(ct, nhom) {
+    const dau = C.KY_DAU[nhom], re = new RegExp('^' + dau + '(\\d+)$', 'i'); let n = 0;
+    for (const x of await DB.all('cua')) if (x.ct === ct && x.cua.nhom === nhom) { const m = re.exec(x.cua.ky_hieu || ''); if (m) n = Math.max(n, +m[1]); }
+    return dau + (n + 1);
+  }
+  const TEN_DIEM = { rong: ['trên', 'giữa', 'dưới'], cao: ['trái', 'giữa', 'phải'] };
+  const TEN_LIEN = { 'go.cot_san': 'Cốt sàn hoàn thiện', 'nhom_ct.be': 'Bệ', 'nhom_ct.fix_tren': 'Cao ô fix trên', 'nhom_ct.fix_duoi': 'Cao ô fix dưới', 'nhom_ct.kinh_day': 'Kính dày',
+    'kinh.nghieng.trai': 'Tường trái nghiêng', 'kinh.nghieng.phai': 'Tường phải nghiêng', 'kinh.bac.cao': 'Gờ cao', 'kinh.bac.rong': 'Gờ rộng', 'kinh.cua.rong': 'Cánh cửa rộng', 'kinh.kinh_day': 'Kính dày' };
+  /** "Rộng dưới", "Mặt 2 cao trái", "Dày tường 1"… */
+  function tenCuaLien(l) {
+    const p = String(l || '').split('.');
+    if ((p[0] === 'rong' || p[0] === 'cao') && p.length === 2) return `${p[0] === 'rong' ? 'Rộng' : 'Cao'} ${TEN_DIEM[p[0]][+p[1]] || ''}`;
+    if (p[0] === 'cheo') return `Chéo ${+p[1] + 1}`;
+    if (p[1] === 'day_tuong') return `Dày tường ${+p[2] + 1}`;
+    if (TEN_LIEN[l]) return TEN_LIEN[l];
+    if (p[0] === 'kinh' && p[1] === 'mat') return `Mặt ${+p[2] + 1} ${p[3] === 'rong' ? 'rộng' : 'cao'} ${(TEN_DIEM[p[3]] || [])[+p[4]] || ''}`;
+    return '';
+  }
+  /** Chip "đoạn này là số nào" trên màn kẻ: các ô số ĐANG HIỆN của mục (theo nhóm + lựa chọn), giá trị hiện tại. */
+  function dsLienCua(c) {
+    const ds = [], them = l => ds.push({ lien: l, nhan: tenCuaLien(l), gia: giaTriTho(l, { la_cua: true, cua: c }) });
+    if (c.nhom === 'kinh') {
+      const K2 = c.kinh || {};
+      ((K2.mat) || []).forEach((m, i) => { for (const a of ['rong', 'cao']) for (let j = 0; j < 3; j++) them(`kinh.mat.${i}.${a}.${j}`); });
+      them('kinh.nghieng.trai'); them('kinh.nghieng.phai');
+      if (K2.bac && K2.bac.co) { them('kinh.bac.cao'); them('kinh.bac.rong'); }
+      if (K2.cua && K2.cua.kieu && K2.cua.kieu !== 'khong') them('kinh.cua.rong');
+      return ds;
+    }
+    for (const a of ['rong', 'cao']) for (let j = 0; j < 3; j++) them(`${a}.${j}`);
+    them('cheo.0'); them('cheo.1');
+    const kh = c.nhom === 'go' ? 'go' : 'nhom_ct', G2 = c[kh] || {};
+    them(kh + '.day_tuong.0'); them(kh + '.day_tuong.1');
+    if (c.nhom === 'go' && G2.san === 'chua_lat') them('go.cot_san');
+    if (c.nhom === 'nhom') {
+      if (G2.loai === 'cua_so') them('nhom_ct.be');
+      if (G2.fix === 'tren' || G2.fix === 'ca_hai') them('nhom_ct.fix_tren');
+      if (G2.fix === 'duoi' || G2.fix === 'ca_hai') them('nhom_ct.fix_duoi');
+    }
+    return ds;
+  }
+  /** "D1: rộng đặt 815 · cao đặt 2 150" (màn kẻ, thẻ danh sách). */
+  function tomCua(c) {
+    const t = C.tinh(c), so = x => (x ? nghin(x.min) : '?');
+    if (c.nhom === 'kinh') { const m = t.mat || []; return `${c.ky_hieu}: ${m.length ? m.map((x, i) => `mặt ${i + 1} ${so(x.rong)} × ${so(x.cao)}`).join(' · ') : 'chưa có mặt'}`; }
+    return `${c.ky_hieu}: rộng đặt ${so(t.rong)} × cao đặt ${typeof t.cao_dat === 'number' ? nghin(t.cao_dat) : so(t.cao)}`;
+  }
+  /** Bản gửi máy chủ: ô vượt trần riêng → ô trống (vẫn giữ + báo đỏ ở máy này). */
+  function guiBanCua(c) { const x = JSON.parse(JSON.stringify(c)); for (const [d, m] of Object.entries(CUA_MAX)) { const v = layD(x, d); if (typeof v === 'number' && v > m) datD(x, d, null); } return x; }
+  /** Gửi một mục cửa (PUT /api/cua/:id) — y như phòng: số bản, ghi đè, gửi lại theo `may`, 409 xung đột, công trình chưa lên → gửi công trình trước. */
+  async function guiCua(j) {
+    const nem = r => { const e = new Error('máy chủ ' + r.st); e.st = r.st; throw e; };
+    const p = await DB.get('cua', j.id); if (!p) return 'xong';
+    const dem = p.dem;
+    const r = await api('PUT', '/api/cua/' + p.id, { ct: p.ct, rev: p.rev || 0, ghi_de: !!p.ghi_de, may: S.may || undefined, cua: guiBanCua(p.cua), anh: p.anh });
+    if (r.st >= 500) nem(r); if (r.st === 401) return 'het_phien';
+    let moi = await DB.get('cua', j.id);
+    if (!moi) { if (r.ok) await DB.put('hang', { k: 'xoa_cua:' + p.id, loai: 'xoa_cua', id: p.id, th: 3, lan: 0, cho_den: 0, dung: '' }); return 'xong'; }      // thợ xoá trong lúc gửi
+    if (r.ok) {
+      moi = await DB.sua('cua', j.id, m => { m.rev = r.j.rev; m.ghi_de = false; m.anh_co = r.j.anh_co; m.sua_luc = r.j.sua_luc; delete m.xung_dot; delete m.loi_gui; return m; }) || moi;
+      for (const id of r.j.can_gui || []) { const a = await DB.get('anh', id); if (a && a.blob) await DB.put('hang', { k: 'anh:' + id, loai: 'anh', id, cua: p.id, th: 2, lan: 0, cho_den: 0, dung: '' }); }
+      if (S.rec && S.rec.id === moi.id) { S.rec.rev = moi.rev; S.rec.ghi_de = false; S.rec.anh_co = moi.anh_co; S.rec.sua_luc = moi.sua_luc; delete S.rec.loi_gui; }
+      if (moi.dem !== dem) return 'giu';
+      return 'xong';
+    }
+    if (r.st === 409 && r.j.hien_tai) { moi = await DB.sua('cua', j.id, m => { m.xung_dot = r.j.hien_tai; return m; }) || moi; await dungViec(j, 'xung_dot'); if (S.rec && S.rec.id === moi.id) { S.rec.xung_dot = moi.xung_dot; hoiXungDot(); } return 'dung'; }
+    if (r.st === 422 && r.j.chi_tiet && r.j.chi_tiet.some(c => c.truong === 'ct' && /chưa có/.test(c.loi))) { const c = await DB.get('ct', p.ct); if (c) { await xepHang('ct', c.id); return 'giu'; } }
+    const lg = r.st === 409 && r.j.xoa ? 'Mục này (hoặc công trình) đã bị xoá trên máy chủ ở máy khác.'
+      : (r.j.error || 'Máy chủ không nhận') + (r.j.chi_tiet ? ': ' + r.j.chi_tiet.slice(0, 3).map(c => c.truong + ' ' + c.loi).join('; ') : '');
+    await DB.sua('cua', j.id, m => { m.loi_gui = lg; return m; }); if (S.rec && S.rec.id === j.id) { S.rec.loi_gui = lg; capCua(); }
+    await dungViec(j, lg); return 'dung';
+  }
+  /** Tải danh sách cửa của công trình từ máy chủ (máy khác đo) — bản trong máy còn chờ gửi / mới hơn thì giữ. */
+  async function dongBoCua(id) {
+    const r = await api('GET', `/api/cong-trinh/${id}/cua`);
+    if (!r.ok) return;
+    const hang = await hangCua(), tren = new Set();
+    for (const s of r.j.cua) {
+      tren.add(s.id);
+      if (hang.xoa_cua.has(s.id)) continue;
+      const cu = await DB.get('cua', s.id);
+      if (cu && (cu.rev >= s.rev || hang.cua.has(s.id))) { if (cu.xoa_duoc !== s.xoa_duoc && !(S.rec && S.rec.id === cu.id)) { cu.xoa_duoc = s.xoa_duoc; await DB.put('cua', cu); } continue; }
+      await DB.put('cua', { id: s.id, ct: s.ct, la_cua: true, cua: s.cua, anh: s.anh, rev: s.rev, dem: 0, anh_co: s.anh_co, sua_luc: s.sua_luc, xoa_duoc: s.xoa_duoc, tao_may: cu ? cu.tao_may : s.sua_luc });
+    }
+    for (const p of await DB.all('cua')) if (p.ct === id && p.rev && !tren.has(p.id) && !hang.cua.has(p.id)) await DB.del('cua', p.id);
+    if (location.hash === '#/ct/' + id) await veDsCua(id);
+  }
+  const xepCua = (a, b) => C.NHOM.indexOf(a.cua.nhom) - C.NHOM.indexOf(b.cua.nhom) || String(a.cua.ky_hieu).localeCompare(String(b.cua.ky_hieu), 'vi', { numeric: true, sensitivity: 'base' });
+  /** tinh + cảnh báo cấp danh sách (trùng ký hiệu) của mọi mục cửa một công trình. */
+  function tinhDs(ds) {
+    const trung = C.kiemDs(ds.map(x => ({ id: x.id, cua: x.cua })));
+    return ds.map(x => { const t = C.tinh(x.cua), th = trung.get(x.id); if (th) { t.canh_bao = t.canh_bao.concat(th); if (t.muc === 'ok') t.muc = 'vang'; } return { id: x.id, cua: x.cua, tinh: t, rec: x }; });
+  }
+  async function veDsCua(id) {
+    const el = $('[data-ui="ds-cua"]'); if (!el) return;
+    const ds = (await DB.all('cua')).filter(x => x.ct === id).sort(xepCua), hang = await hangCua();
+    if (!ds.length) { el.innerHTML = '<li class="nhat">Chưa có cửa nào — bấm “+ Thêm cửa / vách kính”.</li>'; return; }
+    const T = tinhDs(ds); let nhomTruoc = '';
+    el.innerHTML = T.map(({ cua: c, tinh: t, rec }) => {
+      const dau = c.nhom !== nhomTruoc ? `<li class="ds-nhom" data-nhom="${c.nhom}">${NHOM_ICON[c.nhom]} ${esc(C.NHOM_TEN[c.nhom])}</li>` : ''; nhomTruoc = c.nhom;
+      const nd = t.canh_bao.filter(x => x.muc === 'do').length, nv = t.canh_bao.filter(x => x.muc === 'vang').length;
+      const tt = [c.xong ? '✓ đo xong' : 'đang đo', nd ? `<span class="loi-o">${nd} lỗi đỏ</span>` : '', nv ? `${nv} cần xem` : '', `${rec.anh.length} ảnh`].filter(Boolean).join(' · ');
+      return `${dau}<li><button data-act="di" data-h="#/cua/${esc(rec.id)}" data-cua="${esc(rec.id)}" class="muc-${t.muc}"><b>${esc(c.ky_hieu)}${c.vi_tri ? ' · ' + esc(c.vi_tri) : ''}${c.so_luong > 1 ? ` <small>× ${c.so_luong}</small>` : ''}${hang.cua.has(rec.id) ? '<span class="cham" title="Còn thay đổi chưa gửi"></span>' : ''}</b><small>${esc(tomCua(c).replace(/^[^:]*: /, ''))}</small><small>${tt}</small></button></li>`;
+    }).join('');
+  }
+  function moThemCua(ct) {
+    moTam(`<h3>Thêm cửa / vách kính</h3><p class="nhat">Chọn loại — mỗi loại có phần đo riêng:</p>
+${C.NHOM.map(n => `<p><button class="to nhom-chon" data-act="cua-nhom" data-ct="${esc(ct)}" data-nhom="${n}"><b>${NHOM_ICON[n]} ${esc(C.NHOM_TEN[n])}</b><small>${esc(NHOM_GIAI[n])}</small></button></p>`).join('')}
+<p><button data-act="dong-tam">Thôi</button></p>`);
+  }
+  async function taoCua(ct, nhom) {
+    const id = idMoi('cu'), rec = { id, ct, la_cua: true, cua: cuaMoi(nhom, await kyMoi(ct, nhom)), anh: [], rev: 0, dem: 1, tao_may: Date.now() };
+    await DB.put('cua', rec); await xepHang('cua', id); dongTam();
+    di('#/cua/' + id);
+  }
+
+  /* ----- màn một mục cửa ----- */
+  async function veCua(id) {
+    let rec = await DB.get('cua', id);
+    if (!rec) { try { const d = await api('GET', '/api/cua/' + id); if (d.ok) { rec = { id, ct: d.j.ct, la_cua: true, cua: d.j.cua, anh: d.j.anh, rev: d.j.rev, dem: 0, anh_co: d.j.anh_co, sua_luc: d.j.sua_luc, xoa_duoc: d.j.xoa_duoc }; await DB.put('cua', rec); } } catch (e) { /* mất mạng */ } }
+    if (!rec) { app.innerHTML = '<header class="dau"><button class="lui" data-act="di" data-h="#/">‹</button><h1>Không thấy mục cửa</h1></header>'; return; }
+    if (!S.rec || S.rec.id !== id) { S.sai = {}; S.goC = {}; delete S.bao_m; delete S.bao_xong; }
+    S.rec = rec;
+    if (chotNhap(rec)) { rec.ban = true; henLuu(); }
+    S.dsCua = (await DB.all('cua')).filter(x => x.ct === rec.ct && x.id !== id).map(x => ({ id: x.id, cua: x.cua }));
+    app.innerHTML = `<header class="dau"><button class="lui" data-act="di" data-h="#/ct/${esc(rec.ct)}" aria-label="Về công trình">‹</button><h1 data-ui="ten-cua">${esc(rec.cua.ky_hieu)} · ${esc(C.NHOM_TEN[rec.cua.nhom])}</h1></header>
+<div data-ui="tt"></div><div data-ui="cua-than"></div>
+<input type="file" accept="image/*" capture="environment" class="an" data-ui="tep" multiple>`;
+    veCuaThan();
+    if (rec.xung_dot) hoiXungDot();
+  }
+  const vS = v => (v === null || v === undefined ? '' : String(v).replace('.', ','));
+  function oSo(d, nhan, o = {}) {
+    const sai = S.sai[d], v = sai && S.goC[d] !== undefined ? S.goC[d] : vS(layD(S.rec.cua, d));
+    return `<label${o.lop ? ` class="${o.lop}"` : ''}>${esc(nhan)}${o.goi ? `<small>${esc(o.goi)}</small>` : ''}<input data-c="${d}" inputmode="${o.nguyen ? 'numeric' : 'decimal'}" enterkeyhint="next" autocomplete="off" value="${esc(v)}"${o.ph ? ` placeholder="${esc(o.ph)}"` : ''}${sai ? ' aria-invalid="true"' : ''} aria-label="${esc(o.aria || nhan)}"></label>`;
+  }
+  function oChu(d, nhan, o = {}) {
+    const v = layD(S.rec.cua, d), sai = S.sai[d];
+    if (o.dai) return `<label>${esc(nhan)}<textarea data-c="${d}" maxlength="${CUA_CHU[d]}"${o.ph ? ` placeholder="${esc(o.ph)}"` : ''}>${esc(v || '')}</textarea></label>`;
+    return `<label>${esc(nhan)}${o.goi ? `<small>${esc(o.goi)}</small>` : ''}<input data-c="${d}" maxlength="${CUA_CHU[d]}" value="${esc(sai && S.goC[d] !== undefined ? S.goC[d] : v || '')}"${o.list ? ` list="${o.list}"` : ''}${o.ph ? ` placeholder="${esc(o.ph)}"` : ''}${sai ? ' aria-invalid="true"' : ''}></label>`;
+  }
+  /** Hàng chip chọn một: bấm lại chip đang chọn = bỏ chọn. t: 'so' | 'bool' (kiểu giá trị). */
+  function chips(d, ds, t) {
+    const cu = layD(S.rec.cua, d);
+    return `<div class="chips">${ds.map(([v, nh]) => `<button type="button" class="chip" data-act="cua-chon" data-c="${d}" data-v="${esc(v)}"${t ? ` data-t="${t}"` : ''} aria-pressed="${cu !== null && cu !== undefined && String(cu) === String(v)}">${esc(nh)}</button>`).join('')}</div>`;
+  }
+  /** Ba điểm đo cạnh nhau + số đặt hàng (nhỏ nhất) hiện to. */
+  function baDiem(d, ten, diem, min) {
+    return `<fieldset class="ba" data-cb="${d}"><legend>${esc(ten)} <small>(mm, lọt lòng)</small></legend><div class="ba-o">${diem.map((nh, i) => oSo(`${d}.${i}`, nh, { aria: `${ten} ${nh.toLowerCase()}` })).join('')}</div>
+<div class="ba-min" data-min="${min || d}"></div><div class="cb"></div></fieldset>`;
+  }
+  /** Hình mặt bằng nhỏ chiều mở (đứng NGOÀI = phía dưới hình, nhìn vào): tường xám, bản lề chấm, cánh + cung quét. */
+  function hinhMo(ben, mo) {
+    const hx = ben === 'trai' ? 17 : 47, ox = ben === 'trai' ? 47 : 17, ty = mo === 'vao' ? 10 : 70, sw = (ben === 'trai') === (mo === 'vao') ? 1 : 0;
+    return `<svg viewBox="0 0 64 80" width="56" height="70" aria-hidden="true" class="hinh-mo"><rect x="0" y="0" width="64" height="40" class="trong"/><rect x="0" y="37" width="17" height="6" class="tuong-h"/><rect x="47" y="37" width="17" height="6" class="tuong-h"/>`
+      + `<path d="M${hx} ${ty} A30 30 0 0 ${sw} ${ox} 40" class="cung"/><line x1="${hx}" y1="40" x2="${hx}" y2="${ty}" class="canh"/><circle cx="${hx}" cy="40" r="3.5" class="ban-le"/><path d="M32 79 l-4 -6 h8 z" class="mat"/></svg>`;
+  }
+  function hinhLua(ben) {
+    const x0 = ben === 'trai' ? 4 : 30, ax = ben === 'trai' ? 12 : 52, bx = ben === 'trai' ? 34 : 30;
+    return `<svg viewBox="0 0 64 80" width="56" height="70" aria-hidden="true" class="hinh-mo"><rect x="0" y="0" width="64" height="40" class="trong"/><rect x="0" y="37" width="17" height="6" class="tuong-h"/><rect x="47" y="37" width="17" height="6" class="tuong-h"/>`
+      + `<rect x="${x0}" y="30" width="30" height="5" class="canh-lua"/><line x1="${bx}" y1="22" x2="${ax}" y2="22" class="canh"/><path d="M${ax} 22 l${ben === 'trai' ? 6 : -6} -5 v10 z" class="mui"/><path d="M32 79 l-4 -6 h8 z" class="mat"/></svg>`;
+  }
+  /** Chiều mở cửa quay: 4 ô bấm (bản lề trái / phải × mở vào / ra). kh = khối ('go', 'nhom_ct', 'kinh.cua'); khBen = khoá bên bản lề. */
+  function chonMo(kh, khBen, moDs) {
+    const G2 = layD(S.rec.cua, kh) || {};
+    const o = [];
+    for (const mo of moDs) for (const ben of ['trai', 'phai']) o.push(`<button type="button" class="mo-o" data-act="cua-mo" data-kh="${kh}" data-kben="${khBen}" data-ben="${ben}" data-mo="${mo}" aria-pressed="${G2[khBen] === ben && G2.mo === mo}" aria-label="Bản lề ${ben === 'trai' ? 'trái' : 'phải'}, mở ${mo}">${hinhMo(ben, mo)}<small>${ben === 'trai' ? 'Bản lề trái' : 'Bản lề phải'} · mở ${mo === 'vao' ? 'VÀO' : 'RA'}</small></button>`);
+    return `<div class="mo-luoi">${o.join('')}</div><p class="nhat goi"><small>Hình nhìn từ trên xuống — bạn đứng NGOÀI (▲ phía dưới hình), nhìn vào.</small></p>`;
+  }
+  function chonLua(d) {
+    const cu = layD(S.rec.cua, d);
+    return `<div class="mo-luoi hai">${['trai', 'phai'].map(b => `<button type="button" class="mo-o" data-act="cua-chon" data-c="${d}" data-v="${b}" aria-pressed="${cu === b}" aria-label="Cánh chạy về bên ${b === 'trai' ? 'trái' : 'phải'}">${hinhLua(b)}<small>Lùa về ${b === 'trai' ? 'TRÁI' : 'PHẢI'}</small></button>`).join('')}</div><p class="nhat goi"><small>Đứng NGOÀI nhìn vào — cánh chạy về phía nào khi mở.</small></p>`;
+  }
+  const NHOM_DAY = { go: 'go', nhom: 'nhom_ct' };
+  function thanGo() {
+    const G2 = S.rec.cua.go || {}, quay = !G2.kieu || ['mot_canh', 'hai_canh', 'me_con'].includes(G2.kieu);
+    return `<fieldset data-cb="go.day_tuong"><legend>Dày tường (đã trát, mm) <small>— làm khuôn / ốp chỉ</small></legend><div class="hai-o">${oSo('go.day_tuong.0', 'Đầu 1')}${oSo('go.day_tuong.1', 'Đầu 2', { goi: 'tuỳ, nếu không đều' })}</div><div class="cb"></div></fieldset>
+<fieldset data-cb="go.san go.cot_san"><legend>Sàn</legend>${chips('go.san', [['da_lat', 'Đã lát'], ['chua_lat', 'Chưa lát']])}
+${G2.san === 'chua_lat' ? oSo('go.cot_san', 'Sàn hoàn thiện sẽ cao thêm (mm)', { goi: 'gạch + vữa / sàn gỗ — cao đặt hàng trừ phần này' }) : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="go.kieu go.kieu_khac"><legend>Kiểu cửa</legend>${chips('go.kieu', [['mot_canh', '1 cánh'], ['hai_canh', '2 cánh đều'], ['me_con', 'Mẹ con'], ['lua', 'Lùa'], ['xep', 'Xếp'], ['khac', 'Khác']])}
+${G2.kieu === 'khac' ? oChu('go.kieu_khac', 'Kiểu khác', { ph: 'vd cửa vòm' }) : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="go.mo go.ban_le go.lua"><legend>Chiều mở</legend>${G2.kieu === 'lua' || G2.kieu === 'xep' ? chonLua('go.lua') : G2.kieu === 'khac' ? '<p class="nhat"><small>Kiểu khác: ghi chiều mở ở ghi chú.</small></p>' : quay ? chonMo('go', 'ban_le', ['vao', 'ra']) : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="go.op_chi"><legend>Ốp chỉ</legend>${chips('go.op_chi', [[1, '1 mặt'], [2, '2 mặt']], 'so')}<div class="cb"></div></fieldset>`;
+  }
+  function thanNhom() {
+    const G2 = S.rec.cua.nhom_ct || {};
+    return `<fieldset data-cb="nhom_ct.loai nhom_ct.be"><legend>Loại</legend>${chips('nhom_ct.loai', [['cua_di', 'Cửa đi'], ['cua_so', 'Cửa sổ'], ['vach', 'Vách cố định']])}
+${G2.loai === 'cua_so' ? oSo('nhom_ct.be', 'Bệ: sàn → mép dưới ô (mm)') : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.day_tuong nhom_ct.lap"><legend>Tường &amp; vị trí lắp khuôn</legend><div class="hai-o">${oSo('nhom_ct.day_tuong.0', 'Dày tường 1')}${oSo('nhom_ct.day_tuong.1', 'Dày tường 2', { goi: 'tuỳ' })}</div>
+${chips('nhom_ct.lap', [['trong', 'Sát mặt trong'], ['giua', 'Giữa tường'], ['ngoai', 'Sát mặt ngoài']])}<div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.he"><legend>Hệ nhôm</legend>${oChu('nhom_ct.he', 'Hệ nhôm', { list: 'goi-y-he', ph: 'Xingfa, PMI, Việt Pháp…' })}<datalist id="goi-y-he">${C.HE_NHOM.map(h => `<option value="${esc(h)}">`).join('')}</datalist><div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.kieu_mo nhom_ct.mo nhom_ct.ban_le nhom_ct.so_canh"><legend>Kiểu mở</legend>${chips('nhom_ct.kieu_mo', [['quay', 'Mở quay'], ['hat', 'Mở hất'], ['lua', 'Lùa'], ['xep', 'Xếp trượt'], ['co_dinh', 'Cố định']])}
+${oSo('nhom_ct.so_canh', 'Số cánh', { nguyen: true, lop: 'hep' })}
+${G2.kieu_mo === 'quay' ? chonMo('nhom_ct', 'ban_le', ['vao', 'ra']) : G2.kieu_mo === 'hat' ? `<label>Mở hất</label>${chips('nhom_ct.mo', [['ra', 'Hất ra ngoài'], ['vao', 'Hất vào trong']])}` : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.kinh nhom_ct.kinh_day nhom_ct.kinh_loai"><legend>Kính</legend><div class="hai-o">${oSo('nhom_ct.kinh_day', 'Kính dày (mm)', { ph: '8' })}<div class="goi-y-o">${G2.kinh_day === 8 && G2.kinh_loai === 'cuong_luc' ? '' : '<button type="button" data-act="cua-kinh8">8 mm cường lực</button>'}</div></div>
+${chips('nhom_ct.kinh_loai', [['thuong', 'Thường'], ['cuong_luc', 'Cường lực'], ['dan', 'Dán an toàn'], ['hop', 'Kính hộp']])}<div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.fix nhom_ct.fix_tren nhom_ct.fix_duoi"><legend>Ô fix (kính cố định)</legend>${chips('nhom_ct.fix', [['khong', 'Không'], ['tren', 'Fix trên'], ['duoi', 'Fix dưới'], ['ca_hai', 'Trên + dưới']])}
+<div class="hai-o">${G2.fix === 'tren' || G2.fix === 'ca_hai' ? oSo('nhom_ct.fix_tren', 'Cao ô fix trên') : ''}${G2.fix === 'duoi' || G2.fix === 'ca_hai' ? oSo('nhom_ct.fix_duoi', 'Cao ô fix dưới') : ''}</div><div class="cb"></div></fieldset>
+<fieldset data-cb="nhom_ct.tang_cao nhom_ct.tang_ghi"><legend>Lắp đặt</legend><label class="cong-tac"><input type="checkbox" data-c="nhom_ct.tang_cao"${G2.tang_cao ? ' checked' : ''}> Tầng cao / ngoài trời — cần giàn</label>
+${G2.tang_cao ? oChu('nhom_ct.tang_ghi', 'Ghi chú lắp', { ph: 'vd tầng 5, mặt tiền, cần giàn 2 tầng' }) : ''}<div class="cb"></div></fieldset>`;
+  }
+  function thanKinh() {
+    const G2 = S.rec.cua.kinh || {}, mat = G2.mat || [], Cu = G2.cua || {};
+    return `<fieldset data-cb="kinh.dang kinh.mat"><legend>Dạng vách</legend>${chips('kinh.dang', [['thang', 'Thẳng 1 mặt'], ['goc_l', 'Góc L (2 mặt)'], ['chu_u', 'Chữ U (3 mặt)'], ['lua', 'Cửa lùa']])}<div class="cb"></div></fieldset>
+${mat.map((m, i) => `<div class="mat-kinh" data-mat="${i}"><h2>Mặt ${i + 1}${mat.length > 1 ? ` <small class="nhat">/ ${mat.length}</small>` : ''}</h2>
+${baDiem(`kinh.mat.${i}.rong`, `Mặt ${i + 1} — rộng`, ['Trên', 'Giữa', 'Dưới'])}${baDiem(`kinh.mat.${i}.cao`, `Mặt ${i + 1} — cao`, ['Trái', 'Giữa', 'Phải'])}</div>`).join('')}
+<fieldset data-cb="kinh.nghieng"><legend>Tường hai bên có thẳng đứng? <small>(lệch đỉnh – chân, mm — thả dọi / thước nivô)</small></legend><div class="hai-o">${oSo('kinh.nghieng.trai', 'Tường trái lệch')}${oSo('kinh.nghieng.phai', 'Tường phải lệch')}</div><div class="cb"></div></fieldset>
+<fieldset data-cb="kinh.bac kinh.doc"><legend>Gờ / bậc chắn nước</legend>${chips('kinh.bac.co', [[true, 'Có gờ'], [false, 'Không gờ']], 'bool')}
+${G2.bac && G2.bac.co ? `<div class="hai-o">${oSo('kinh.bac.cao', 'Gờ cao')}${oSo('kinh.bac.rong', 'Gờ rộng')}</div>` : ''}${oChu('kinh.doc', 'Sàn dốc về đâu', { ph: 'vd về góc trong bên phải (ga thoát)' })}<div class="cb"></div></fieldset>
+<fieldset data-cb="kinh.cua"><legend>Cửa kính</legend>${chips('kinh.cua.kieu', [['quay', 'Mở quay'], ['lua', 'Lùa'], ['khong', 'Không cửa']])}
+${Cu.kieu && Cu.kieu !== 'khong' ? oSo('kinh.cua.rong', 'Rộng cánh cửa (mm)') : ''}
+${Cu.kieu === 'quay' ? chonMo('kinh.cua', 'ban_le_ben', ['ra', 'vao']) + `<label>Bản lề</label>${chips('kinh.cua.ban_le', [['kinh_tuong', 'Kính – tường'], ['kinh_kinh', 'Kính – kính']])}` : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="kinh.kinh_day kinh.kinh_loai kinh.pk_mau"><legend>Kính &amp; phụ kiện</legend><label>Kính dày (cường lực)</label>${chips('kinh.kinh_day', [[8, '8 mm'], [10, '10 mm'], [12, '12 mm']], 'so')}
+${chips('kinh.kinh_loai', [['trong', 'Kính trong'], ['mo', 'Kính mờ']])}<label>Phụ kiện</label>${chips('kinh.pk_mau', [['inox', 'Inox 304'], ['den', 'Màu đen'], ['vang', 'Màu vàng'], ['khac', 'Khác']])}<div class="cb"></div></fieldset>
+<fieldset data-cb="kinh.vat"><legend>Gần mép kính (để tránh khoan)</legend>${oChu('kinh.vat', 'Vòi sen / ổ điện / ống nước — cách mép bao nhiêu', { dai: true, ph: 'vd vòi sen cách mép trái 250, ống nước âm tường cao 1100' })}<p class="nhat"><small>Chụp thêm ảnh chỗ đó và kẻ số lên ảnh.</small></p><div class="cb"></div></fieldset>`;
+  }
+  /** Dựng lại phần thân của màn mục cửa (giữ chỗ cuộn) — gọi khi chọn chip / đóng màn kẻ; gõ số thì chỉ capCua (giữ tiêu điểm). */
+  function veCuaThan() {
+    const el = $('[data-ui="cua-than"]'); if (!el || !S.rec || !S.rec.la_cua) return;
+    const r = S.rec, c = r.cua, y = window.scrollY, kinh = c.nhom === 'kinh';
+    el.innerHTML = `<fieldset data-cb="ky_hieu vi_tri so_luong"><legend>Chung</legend><div class="hai-o">${oChu('ky_hieu', 'Ký hiệu')}${oSo('so_luong', 'Số lượng', { nguyen: true })}</div>
+${oChu('vi_tri', 'Vị trí', { list: 'goi-y-vt', ph: 'vd WC tầng 2, phòng ngủ master' })}<datalist id="goi-y-vt">${GOI_Y_TEN.map(t => `<option value="${esc(t)}">`).join('')}</datalist><div class="cb"></div></fieldset>
+${kinh ? '' : `${baDiem('rong', 'Rộng', ['Trên', 'Giữa', 'Dưới'])}${baDiem('cao', 'Cao', ['Trái', 'Giữa', 'Phải'])}
+<details class="cheo" data-cb="cheo"${(c.cheo || []).some(v => v > 0) ? ' open' : ''}><summary>⋯ Đo 2 đường chéo (kiểm ô vuông)</summary><div class="hai-o">${oSo('cheo.0', 'Chéo 1')}${oSo('cheo.1', 'Chéo 2')}</div><div class="cb"></div></details>`}
+${c.nhom === 'go' ? thanGo() : c.nhom === 'nhom' ? thanNhom() : thanKinh()}
+<fieldset data-cb="chat_lieu mau phu_kien ghi_chu"><legend>Vật liệu &amp; ghi chú</legend>${oChu('chat_lieu', c.nhom === 'go' ? 'Chất liệu (gỗ, cánh)' : c.nhom === 'nhom' ? 'Chất liệu' : 'Chất liệu khung / nẹp', { ph: c.nhom === 'go' ? 'vd MDF chống ẩm phủ melamine' : '' })}
+${oChu('mau', c.nhom === 'nhom' ? 'Màu nhôm' : 'Màu', { ph: c.nhom === 'nhom' ? 'vd ghi xám, nâu cafe' : '' })}${oChu('phu_kien', 'Phụ kiện', { ph: c.nhom === 'go' ? 'vd khoá tay gạt, bản lề lá 4 cái' : '' })}${oChu('ghi_chu', 'Ghi chú', { dai: true })}<div class="cb"></div></fieldset>
+<h2>Ảnh</h2><div class="anhs" data-anh=""></div>
+<p><button class="to" data-act="chup" data-tuong="">📷 Chụp ô cửa — kẻ số lên ảnh</button></p>
+<label class="cong-tac"><input type="checkbox" data-c="xong"${c.xong ? ' checked' : ''}> Đo xong mục này</label>
+${r.xoa_duoc === false ? '' : `<p><button class="do" data-act="cua-xoa" data-id="${esc(r.id)}">Xoá ${esc(c.ky_hieu)}</button></p>`}`;
+    window.scrollTo(0, y);
+    capCua(); veAnhs();
+  }
+  const MUC_LOP = { do: 'loi', vang: 'vang', ghi: 'xam' };
+  /** Số đặt hàng + cảnh báo tại chỗ (đặt dưới đúng phần), phần còn lại + tóm tắt ở đầu màn. Không dựng lại ô nhập (giữ tiêu điểm khi đang gõ). */
+  function capCua() {
+    const r = S.rec; if (!r || !r.la_cua || !$('[data-ui="cua-than"]')) return;
+    const c = r.cua, t = C.tinh(c), th = C.kiemDs((S.dsCua || []).concat([{ id: r.id, cua: c }])).get(r.id) || [];
+    const cb = t.canh_bao.concat(th);
+    if (th.length && t.muc === 'ok') t.muc = 'vang';
+    const minH = (x, them) => x ? `<span>Đặt hàng</span> <b>${esc(nghin(x.min))}</b>${x.n > 1 ? ` <small class="${x.lech > C.NGUONG.lech_do ? 'loi-o' : x.lech > C.NGUONG.lech_vang ? 'vang-o' : ''}">lệch ${esc(g(x.lech))} mm</small>` : ''}${them || ''}` : '<small>Số đặt hàng = số NHỎ NHẤT của 3 điểm</small>';
+    for (const el of $$('[data-min]')) {
+      const k = el.dataset.min, m = /^kinh\.mat\.(\d+)\.(rong|cao)$/.exec(k);
+      const x = m ? (t.mat && t.mat[+m[1]] ? t.mat[+m[1]][m[2]] : null) : t[k];
+      el.innerHTML = minH(x, k === 'cao' && typeof t.cao_dat === 'number' ? ` <span class="dat">→ đặt <b>${esc(nghin(t.cao_dat))}</b> <small>(trừ sàn hoàn thiện)</small></span>` : '');
+      el.dataset.muc = x ? (x.lech > C.NGUONG.lech_do ? 'do' : x.lech > C.NGUONG.lech_vang ? 'vang' : 'ok') : '';
+    }
+    const hop = $$('[data-cb]').map(el => ({ el, ks: el.dataset.cb.split(' '), L: [] }));
+    const con = [];
+    for (const x of cb) {
+      let tot = null, dai = -1;
+      for (const h of hop) for (const k of h.ks) if ((x.truong === k || x.truong.startsWith(k + '.')) && k.length > dai) { dai = k.length; tot = h; }
+      (tot ? tot.L : con).push(x);
+    }
+    for (const [d, loi] of Object.entries(S.sai)) { const h = hop.find(q => q.ks.some(k => d === k || d.startsWith(k + '.'))); (h ? h.L : con).push({ muc: 'do', truong: d, loi: `${tenO2(d)}: ${loi} — máy đang giữ số cũ.` }); }
+    for (const h of hop) { const o = $(':scope > .cb', h.el); if (o) o.innerHTML = h.L.map(x => `<div class="msg ${MUC_LOP[x.muc]}" data-cb-muc="${x.muc}">${esc(x.loi)}</div>`).join(''); }
+    const tt = $('[data-ui="tt"]'); if (!tt) return;
+    const nd = cb.filter(x => x.muc === 'do').length + Object.keys(S.sai).length, nv = cb.filter(x => x.muc === 'vang').length;
+    const L = [`<div class="msg ${nd ? 'loi' : nv ? 'vang' : 'ok'}" data-ui="cua-tom">${esc(tomCua(c))}${nd ? ` · ${nd} lỗi đỏ` : ''}${nv ? ` · ${nv} cần xem` : ''}${!nd && !nv ? ' · đủ số ✓' : ''}</div>`];
+    if (S.bao_m) L.push(`<div class="msg vang" data-ui="bao-m">${esc(S.bao_m)}</div>`);
+    if (S.bao_xong) L.push(`<div class="msg loi" data-ui="bao-xong">${esc(S.bao_xong)}</div>`);
+    for (const x of con) L.push(`<div class="msg ${MUC_LOP[x.muc]}" data-cb-muc="${x.muc}">${esc(x.loi)}</div>`);
+    if (r.loi_gui) L.push(`<div class="msg loi">Máy chủ chưa nhận: ${esc(r.loi_gui)}</div>`);
+    tt.innerHTML = L.join('');
+    const h1 = $('[data-ui="ten-cua"]'); if (h1) h1.textContent = `${c.ky_hieu || '?'} · ${C.NHOM_TEN[c.nhom]}`;
+  }
+  const tenO2 = d => ({ ky_hieu: 'Ký hiệu', so_luong: 'Số lượng', 'nhom_ct.so_canh': 'Số cánh' })[d] || tenCuaLien(d) || d;
+  /** Gõ một ô của mục cửa. Số: chữ lạ / âm / quá trần → đỏ ở ô, giữ số cũ (như phòng). */
+  function suaC(d, v, el) {
+    const r = S.rec, c = r.cua; delete S.bao_m;
+    const sai = t => { S.sai[d] = t; S.goC[d] = v; if (el) el.setAttribute('aria-invalid', 'true'); capCua(); };
+    const dung = () => { delete S.sai[d]; delete S.goC[d]; if (el) el.removeAttribute('aria-invalid'); };
+    if (d === 'ky_hieu') { const k = v.trim(); if (!k) return sai('cần ký hiệu (vd D1)'); if (!KY_RE.test(k)) return sai('chỉ gồm chữ, số, dấu cách . _ / # - (tối đa 12)'); dung(); c.ky_hieu = k; }
+    else if (CUA_CHU[d]) { dung(); datD(c, d, v.slice(0, CUA_CHU[d])); }
+    else if (d === 'so_luong' || d === 'nhom_ct.so_canh') {
+      const t = v.trim(), lo = d === 'so_luong' ? 1 : 0, hi = d === 'so_luong' ? 99 : 12;
+      if (!t) { dung(); datD(c, d, d === 'so_luong' ? 1 : null); }
+      else if (!/^\d{1,2}$/.test(t) || +t < lo || +t > hi) return sai(`số nguyên ${lo} … ${hi}`);
+      else { dung(); datD(c, d, +t); }
+    } else {
+      const x = docO(v);
+      if (x.sai) return sai(x.sai);
+      if (x.v !== null && CUA_MAX[d] && x.v > CUA_MAX[d]) return sai(`quá lớn (tối đa ${CUA_MAX[d]})`);
+      dung(); datD(c, d, x.v);
+    }
+    doi(); capCua();
+  }
+  async function xoaCua(b) {
+    if (!haiLan(b, 'Bấm lần nữa để xoá mục này')) return;
+    const r = S.rec;
+    if (r.rev) { const x = await api('DELETE', '/api/cua/' + r.id).catch(() => null); if (!x || (!x.ok && x.st !== 404)) return alertNho(x && x.j.error ? x.j.error : 'Cần mạng để xoá mục đã gửi lên máy chủ.'); }
+    for (const a of r.anh) await boAnhMay(a.id);
+    await DB.del('cua', r.id); await DB.del('hang', 'cua:' + r.id); clearTimeout(S.hen); S.rec = null;
+    if (!r.rev) await xepHang('xoa_cua', r.id);      // lần gửi đầu có khi đang đi: xoá sau nó (404 = máy chủ chưa từng có)
+    di('#/ct/' + r.ct);
+  }
+  function chonCua(b) {
+    const r = S.rec, c = r.cua, d = b.dataset.c, t = b.dataset.t;
+    const v = t === 'so' ? +b.dataset.v : t === 'bool' ? b.dataset.v === 'true' : b.dataset.v;
+    const cu = layD(c, d), moi = cu !== null && cu !== undefined && String(cu) === String(v) ? null : v;      // bấm lại = bỏ chọn
+    datD(c, d, moi);
+    if (d === 'kinh.dang' && moi) {      // số mặt theo dạng vách (giữ số đã đo của các mặt còn lại)
+      const n = MAT_CAN[moi], mat = c.kinh.mat || (c.kinh.mat = []);
+      while (mat.length < n) mat.push({ rong: [null, null, null], cao: [null, null, null] });
+      if (mat.length > n && !mat.slice(n).some(m => m.rong.concat(m.cao).some(x => x !== null))) mat.length = n;
+      if (moi === 'lua' && !c.kinh.cua.kieu) c.kinh.cua.kieu = 'lua';
+    }
+    if (d === 'kinh.cua.kieu' && moi === 'quay' && !c.kinh.cua.mo) c.kinh.cua.mo = null;
+    doi(); veCuaThan();
+  }
+
+  /* ----- phiếu đo cửa ----- */
+  function moPhieu(ct) {
+    S.phieu = S.phieu && S.phieu.ct === ct ? S.phieu : { ct, nhom: C.NHOM.slice() };
+    veTamPhieu();
+  }
+  async function veTamPhieu() {
+    const P = S.phieu, ds = (await DB.all('cua')).filter(x => x.ct === P.ct), hang = await hangCua(), cho = ds.filter(x => hang.cua.has(x.id) || !x.rev).length;
+    const dem = n => ds.filter(x => x.cua.nhom === n).length;
+    moTam(`<h3>Phiếu đo cửa</h3><p class="nhat"><small>Chọn nhóm — gửi riêng cho xưởng gỗ / nhà cung cấp nhôm / kính:</small></p>
+<div class="chips" data-ui="phieu-nhom">${C.NHOM.map(n => `<button type="button" class="chip" data-act="phieu-nhom" data-v="${n}" aria-pressed="${P.nhom.includes(n)}">${NHOM_ICON[n]} ${esc(C.NHOM_TEN[n])} (${dem(n)})</button>`).join('')}</div>
+${cho ? `<div class="msg vang" data-ui="phieu-cho">${cho} mục chưa lên máy chủ — phiếu in lấy bản trên máy chủ (cần mạng); Tải CSV lấy bản trong máy này.</div>` : ''}
+<div class="loi-o" data-ui="phieu-loi"></div>
+<p><button class="chinh to" data-act="phieu-xem"${P.nhom.length ? '' : ' disabled'}>Xem / in phiếu (A4)</button></p>
+<p><button class="to" data-act="phieu-csv"${P.nhom.length ? '' : ' disabled'}>Tải CSV (Excel)</button></p>
+<p><button data-act="dong-tam">Đóng</button></p>`);
+  }
+  const urlPhieu = (ct, nhom, dang) => `/api/cong-trinh/${encodeURIComponent(ct)}/phieu-cua?nhom=${nhom.join(',')}&dang=${dang}`;
+  async function xemPhieu() {
+    const P = S.phieu; if (!P || !P.nhom.length) return;
+    const loi = t => { const o = $('[data-ui="phieu-loi"]', lop); if (o) o.textContent = t; };
+    await chayHang().catch(() => null);      // gửi nốt những gì đang chờ trước khi lấy phiếu
+    const u = urlPhieu(P.ct, P.nhom, 'html');
+    let r; try { r = await fetch(u, { credentials: 'same-origin', cache: 'no-store' }); } catch (e) { return loi('Mất mạng — phiếu in cần mạng. Tải CSV vẫn được.'); }
+    if (r.status === 401) { canDangNhap(); return; }
+    if (!r.ok) return loi(r.status === 404 ? 'Công trình chưa lên máy chủ — chờ gửi xong rồi thử lại.' : 'Máy chủ không trả phiếu (' + r.status + ').');
+    lop.innerHTML = `<div class="phieu" data-ui="phieu"><div class="cong-cu"><button data-act="phieu-dong">‹ Đóng</button><button class="chinh" data-act="phieu-in">🖨 In / lưu PDF</button></div>
+<iframe data-ui="phieu-khung" title="Phiếu đo cửa" src="${esc(u)}"></iframe></div>`;
+    dayLS();
+  }
+  async function taiCsv() {
+    const P = S.phieu; if (!P || !P.nhom.length) return;
+    const ds = (await DB.all('cua')).filter(x => x.ct === P.ct && P.nhom.includes(x.cua.nhom)), ct = await DB.get('ct', P.ct);
+    const csv = C.phieuCsv(tinhDs(ds), P.nhom), b = new Blob([csv], { type: 'text/csv;charset=utf-8' }), u = URL.createObjectURL(b);
+    const ten = ((ct && ct.ten) || 'cong-trinh').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'cong-trinh';
+    const a = document.createElement('a'); a.href = u; a.download = `phieu-do-cua-${ten}${P.nhom.length < 3 ? '-' + P.nhom.join('-') : ''}.csv`; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 10000);
   }
 
   /* ================= xung đột ================= */
@@ -1335,7 +1743,7 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
   function hoiXungDot() {
     const r = S.rec, h = r.xung_dot; if (!h) return;
     const n = anhChiMayNay(r, h).length;
-    moTam(`<h3>Phòng “${esc(r.ten)}” vừa được sửa ở máy khác</h3><p>Máy chủ đang giữ bản sửa lúc ${esc(gioPhut(h.sua_luc))}. Chọn bản giữ lại:</p>
+    moTam(`<h3>${r.la_cua ? `Mục ${esc(r.cua.ky_hieu)}` : `Phòng “${esc(r.ten)}”`} vừa được sửa ở máy khác</h3><p>Máy chủ đang giữ bản sửa lúc ${esc(gioPhut(h.sua_luc))}. Chọn bản giữ lại:</p>
 <ul class="nhat"><li><b>Giữ bản máy này</b>: bản trên máy chủ bị thay bằng số đo của máy này.</li><li><b>Lấy bản máy chủ</b>: số đo / nét kẻ sửa ở máy này từ lần gửi trước bị bỏ.${n ? ` ${n} ảnh chụp ở máy này chưa lên máy chủ — giữ lại (kèm nét đã kẻ) ở cả hai cách.` : ''}</li></ul>
 <div class="hang"><button data-act="xd-giu">Giữ bản máy này</button><button data-act="xd-lay">Lấy bản máy chủ</button></div>`);
   }
@@ -1344,18 +1752,20 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
     let guiLai = giu;
     if (giu) { r.rev = h.rev; r.ghi_de = true; }
     else {
-      const giuAnh = anhChiMayNay(r, h), cu = r.anh, caoCu = r.phong.cao;
+      const giuAnh = anhChiMayNay(r, h), cu = r.anh, caoCu = r.la_cua ? 0 : r.phong.cao;
       // trần "điền sẵn 2700" chỉ còn đúng khi bản máy chủ vẫn mang đúng số đó (máy kia đo trần 2850 → trần đã đo)
       if (r.cao_san && !(h.phong && h.phong.cao === caoCu)) delete r.cao_san;
-      Object.assign(r, { ten: h.ten, xong: h.xong, ghi_chu: h.ghi_chu, phong: h.phong, anh: h.anh.concat(giuAnh), rev: h.rev, anh_co: h.anh_co, ghi_de: false });
+      if (r.la_cua) Object.assign(r, { cua: h.cua, anh: h.anh.concat(giuAnh), rev: h.rev, anh_co: h.anh_co, ghi_de: false });
+      else Object.assign(r, { ten: h.ten, xong: h.xong, ghi_chu: h.ghi_chu, phong: h.phong, anh: h.anh.concat(giuAnh), rev: h.rev, anh_co: h.anh_co, ghi_de: false });
       // ảnh máy này đã lên rồi mà bản máy chủ bỏ (máy kia xoá): dọn tệp trong máy
       const con = new Set(r.anh.map(a => a.id)); for (const a of cu) if (!con.has(a.id)) await boAnhMay(a.id);
       if (giuAnh.length) { guiLai = true; r.dem = (r.dem || 0) + 1; }      // khai ảnh còn giữ lên máy chủ
     }
-    delete r.xung_dot; await DB.put('phong', r);
-    if (guiLai) await DB.put('hang', { k: 'phong:' + r.id, loai: 'phong', id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
-    else await DB.del('hang', 'phong:' + r.id);
-    dongTam(); vePhong(r.id); capThanh(); henChay(200);
+    const kho = r.la_cua ? 'cua' : 'phong';
+    delete r.xung_dot; await DB.put(kho, r);
+    if (guiLai) await DB.put('hang', { k: kho + ':' + r.id, loai: kho, id: r.id, th: 1, lan: 0, cho_den: 0, dung: '', ver: r.dem });
+    else await DB.del('hang', kho + ':' + r.id);
+    dongTam(); if (r.la_cua) veCua(r.id); else vePhong(r.id); capThanh(); henChay(200);
   }
 
   /* ================= quản lý ================= */
@@ -1418,6 +1828,7 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
       const c = await DB.get('ct', b.dataset.id);
       if (c && c.tren_may) { const r = await api('DELETE', '/api/cong-trinh/' + c.id).catch(() => null); if (!r || !r.ok) return alertCt(r && r.j.error ? r.j.error : 'Cần mạng để xoá.'); }
       for (const p of await DB.all('phong')) if (p.ct === b.dataset.id) { for (const a of p.anh) await boAnhMay(a.id); await DB.del('phong', p.id); await DB.del('hang', 'phong:' + p.id); }
+      for (const p of await DB.all('cua')) if (p.ct === b.dataset.id) { for (const a of p.anh) await boAnhMay(a.id); await DB.del('cua', p.id); await DB.del('hang', 'cua:' + p.id); }
       await DB.del('ct', b.dataset.id); await DB.del('hang', 'ct:' + b.dataset.id); di('#/');
     },
     'ph-moi': b => moFormPh(b.dataset.id),
@@ -1484,6 +1895,18 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
       di('#/ct/' + r.ct);
     },
     'xd-giu': () => xungDot(true), 'xd-lay': () => xungDot(false),
+    'cua-them': b => moThemCua(b.dataset.id),
+    'cua-nhom': b => taoCua(b.dataset.ct, b.dataset.nhom),
+    'cua-chon': b => chonCua(b),
+    'cua-mo': b => { const c = S.rec.cua, G2 = layD(c, b.dataset.kh); if (!G2) return; const on = G2[b.dataset.kben] === b.dataset.ben && G2.mo === b.dataset.mo; G2[b.dataset.kben] = on ? null : b.dataset.ben; G2.mo = on ? null : b.dataset.mo; doi(); veCuaThan(); },
+    'cua-kinh8': () => { const G2 = S.rec.cua.nhom_ct; G2.kinh_day = 8; G2.kinh_loai = 'cuong_luc'; delete S.sai['nhom_ct.kinh_day']; doi(); veCuaThan(); },
+    'cua-xoa': b => xoaCua(b),
+    'cua-phieu': b => moPhieu(b.dataset.id),
+    'phieu-nhom': b => { const P = S.phieu, n = b.dataset.v; P.nhom = P.nhom.includes(n) ? P.nhom.filter(x => x !== n) : C.NHOM.filter(x => x === n || P.nhom.includes(x)); veTamPhieu(); },
+    'phieu-xem': () => xemPhieu(),
+    'phieu-csv': () => taiCsv(),
+    'phieu-in': () => { const f = $('[data-ui="phieu-khung"]', lop); try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { window.print(); } },
+    'phieu-dong': () => dongTam(),
     'tk-moi': () => moFormTk(),
     'sinh-mk': () => { const o = $('.tam input[name="mk"]', lop); if (o) o.value = sinhMk(); },
     'tk-khoa': async b => { if (!haiLan(b, 'Bấm lần nữa để khoá (máy thợ bị đăng xuất ngay)')) return; await api('POST', `/api/quan-ly/tai-khoan/${b.dataset.id}/khoa`).catch(() => null); veTaiKhoan(); },
@@ -1541,6 +1964,7 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
   document.addEventListener('input', e => {
     const el = e.target; if (!el.dataset) return;
     if (el.dataset.o && S.rec && app.contains(el)) suaO(el.dataset.o, el.value, el);
+    else if (el.dataset.c && S.rec && S.rec.la_cua && app.contains(el) && el.type !== 'checkbox') suaC(el.dataset.c, el.value, el);
     else if (el.dataset.f && S.ct && lop.contains(el)) xemCT();
     else if (el.dataset.ui === 'o-so-nhap') { if (K.oCho) { K.oCho = null; veO(); } ghiNhap(el.value); }      // gõ lại số: bỏ câu hỏi "khác số cũ"; giữ số gõ dở
   });
@@ -1555,12 +1979,30 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
       if (!d.sai && d.v > 0 && d.v < SOAT.tuong_min) { const mm = G.rn(d.v * 1000, 1); el.value = String(mm); suaO(el.dataset.o, el.value, el); S.bao_m = `${tenO(el.dataset.o)}: đã đổi ${g(d.v)} m thành ${nghin(mm)} mm.`; capPhanTich(); }
     }
     if (el.dataset && el.dataset.o && S.rec) luuNgay();
+    if (el.dataset && el.dataset.c && S.rec && S.rec.la_cua && app.contains(el)) {
+      const d = el.dataset.c, c = S.rec.cua;
+      if (el.type === 'checkbox') {
+        if (d === 'xong') {      // lỗi đỏ chặn "Đo xong" (như phòng): sửa trước khi đặt hàng
+          const nd = el.checked ? C.tinh(c).canh_bao.filter(x => x.muc === 'do').length + Object.keys(S.sai).length : 0;
+          if (nd) { el.checked = false; S.bao_xong = `Còn ${nd} lỗi đỏ — sửa trước khi đánh dấu đo xong.`; capCua(); window.scrollTo(0, 0); return; }
+          delete S.bao_xong;
+        }
+        datD(c, d, !!el.checked); doi(); if (d === 'xong') capCua(); else veCuaThan();
+      } else if (/^(rong|cao|cheo)\.\d$|^kinh\.mat\.\d\.(rong|cao)\.\d$/.test(d)) {      // "0,82" (mét) → 820 mm khi rời ô
+        const x = docO(el.value);
+        if (!x.sai && x.v > 0 && x.v < SOAT.tuong_min && !Number.isInteger(x.v)) { const mm = G.rn(x.v * 1000, 1); el.value = String(mm); suaC(d, el.value, el); S.bao_m = `${tenCuaLien(d)}: đã đổi ${chuGo(x.v)} m thành ${nghin(mm)} mm.`; capCua(); }
+      }
+      luuNgay();
+    }
 
   });
-  document.addEventListener('focusout', e => { if (e.target.dataset && e.target.dataset.o) luuNgay(); });
+  document.addEventListener('focusout', e => { if (e.target.dataset && (e.target.dataset.o || e.target.dataset.c)) luuNgay(); });
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.ui === 'hoi-chu') { e.preventDefault(); const b = $('[data-act="hoi-xong"]', lop); if (b) b.click(); }
     if (e.target.dataset && e.target.dataset.ui === 'o-so-nhap') { if (e.key === 'Enter') { e.preventDefault(); ketSo(); } else if (e.key === 'Escape') { e.preventDefault(); dongSo(); veKeCanvas(); } }
+    if (e.key === 'Enter' && e.target.dataset && e.target.dataset.c && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') {      // Enter: sang ô số kế tiếp (đo 3 điểm liền tay)
+      e.preventDefault(); const ds = $$('[data-ui="cua-than"] input[data-c]:not([type="checkbox"])'), i = ds.indexOf(e.target); if (i >= 0 && i < ds.length - 1) ds[i + 1].focus(); else e.target.blur();
+    }
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.f) { e.preventDefault(); const ds = $$('.tam input[data-f]', lop), i = ds.indexOf(e.target); if (i >= 0 && i < ds.length - 1) ds[i + 1].focus(); else xongChiTiet(); }
   });
 

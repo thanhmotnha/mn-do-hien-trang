@@ -246,7 +246,7 @@ test('nâng CSDL bản 1 → 2: giữ dữ liệu, người tạo phòng = ngư�
   d.exec("INSERT INTO muc (id, ct, ten, phong, gui, goi_tinh, nguoi_gui, tao_luc, sua_luc) VALUES ('phabcdef', 'ctabcdef', 'P', '{}', '{}', '0.1.0', 7, 1, 1)");
   d.close();
   const db = csdl.mo(dir);
-  assert.equal(db.get('PRAGMA user_version').user_version, 2);
+  assert.equal(db.get('PRAGMA user_version').user_version, csdl.BAN_CSDL);      // 1 → 2 → 3 (bản 3 = bảng cửa, 0.3.0) trong một lần mở
   assert.deepEqual(db.get('SELECT tao_boi, may, goc FROM muc'), { tao_boi: 7, may: null, goc: null });
   db.close(); fs.rmSync(dir, { recursive: true, force: true });
 });

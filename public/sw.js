@@ -1,7 +1,7 @@
 // Giữ VỎ ứng dụng trong máy để mất mạng vẫn mở được trang, xem / sửa nháp, chụp ảnh. /api/* luôn đi mạng (không bao giờ giữ số đo / ảnh ở đây).
 // Đổi bản = đổi tên bộ nhớ đệm (bộ cũ bị xoá khi bản mới bật).
-const BAN = 'mndo-0.2.0';
-const VO = ['/', '/app.js', '/app.css', '/goi.js', '/mncf-phong.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png'];
+const BAN = 'mndo-0.3.0';
+const VO = ['/', '/app.js', '/app.css', '/goi.js', '/cua.js', '/mncf-phong.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(BAN).then(c => c.addAll(VO)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== BAN).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
