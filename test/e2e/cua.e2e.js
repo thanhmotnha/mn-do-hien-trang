@@ -9,6 +9,8 @@ const { chromium } = require('playwright');
 const { moMay, quanLy, thoMoi, MK_THO } = require('../tro-giup');
 const RA = process.env.ANH_RA || path.join(__dirname, 'ra');
 fs.mkdirSync(RA, { recursive: true });
+const FIN = process.env.ANH_FINAL || RA;      // ảnh "final-*" của vòng soát 0.3.0
+fs.mkdirSync(FIN, { recursive: true });
 const sl = ms => new Promise(r => setTimeout(r, ms));
 const cho = async (fn, ms = 8000, ten = '') => { const het = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > het) throw new Error('chờ quá lâu: ' + ten); await sl(100); } };
 const W = 390;
@@ -121,6 +123,8 @@ async function kiemMan(page, ten) {
     await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="lua"]');
     assert.equal(await page.locator('[data-act="cua-mo"]').count(), 0); assert.equal(await page.locator('.mo-o[data-c="go.lua"]').count(), 2);
     await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="mot_canh"]');
+    r = await rec(page); assert.deepEqual([r.cua.go.ban_le, r.cua.go.mo, r.cua.go.lua], [null, null, null], 'đổi kiểu: bỏ chiều mở của kiểu cũ');
+    await page.click('[data-act="cua-mo"][data-ben="trai"][data-mo="vao"]');
     await page.click('[data-act="cua-chon"][data-c="go.op_chi"][data-v="2"]');
     assert.equal((await rec(page)).cua.go.op_chi, 2);
     await kiemMan(page, 'cửa gỗ');
@@ -316,6 +320,142 @@ async function kiemMan(page, ten) {
     await page.click('[aria-label="Về danh sách"]');
     await cho(async () => /\d\/3 cửa xong/.test(await page.textContent('[data-ui="ds-ct"]')), 5000, 'danh sách công trình đếm cửa');
     ghi('máy khác tải danh sách cửa từ máy chủ; xoá = bấm hai lần; máy kia bỏ mục đã xoá; danh sách công trình đếm "N/M cửa xong"');
+
+
+    // ---------- 8. VÒNG SOÁT 0.3.0 (08/11/2026) — mỗi lỗi một ca ----------
+    console.log('— vòng soát 0.3.0');
+    await page.click(`[data-h="#/ct/${ctId}"]`); await page.waitForSelector('[data-act="cua-them"]');
+    await page.click('[data-act="cua-them"]'); await page.click('[data-act="cua-nhom"][data-nhom="go"]');
+    await page.waitForSelector('[data-c="rong.0"]');
+    await page.fill('[data-c="vi_tri"]', 'Phòng ngủ 2');
+    // R2-1: Enter từ "Cao phải" bỏ qua ô chéo đang ẩn (⋯ đóng), sang Dày tường — số kế tiếp không gõ dính
+    assert.equal(await page.locator('details.cheo[open]').count(), 0);
+    await page.focus('[data-c="rong.0"]');
+    for (const v of ['820', '815', '818', '2150', '2160', '2155']) { await page.keyboard.type(v); await page.keyboard.press('Enter'); }
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.c), 'go.day_tuong.0', 'Enter từ cao.2 sang Dày tường');
+    await page.keyboard.type('110'); await sl(100);
+    r = await rec(page);
+    assert.deepEqual([r.cua.cao[2], r.cua.go.day_tuong[0]], [2155, 110], 'số không dính vào Cao phải');
+    ghi('R2-1: Enter đi qua ô chéo đang ẩn — Cao phải → Dày tường');
+    // R2-3 + R2-2: 2 cánh đều chỉ vào / ra (hình 2 cánh); mẹ con = cánh mẹ bên nào; ▲ chỉ lên + chữ TRONG / NGOÀI trong hình; Phía TRONG là
+    await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="hai_canh"]');
+    assert.equal(await page.locator('.mo-o[data-act="cua-mo"]').count(), 2, '2 cánh đều: 2 ô vào / ra');
+    assert.deepEqual(await page.$$eval('.mo-o[data-act="cua-mo"] small', ds => ds.map(x => x.textContent)), ['2 cánh · mở VÀO', '2 cánh · mở RA']);
+    const svg = await page.$eval('.mo-o[data-act="cua-mo"] svg', s => ({ chu: [...s.querySelectorAll('text')].map(t => t.textContent), tam: s.querySelector('path.mat').getAttribute('d'), cung: s.querySelectorAll('path.cung').length }));
+    assert.deepEqual(svg.chu, ['TRONG', 'NGOÀI']); assert.equal(svg.tam, 'M32 84 l-4 6 h8 z', '▲ (đỉnh ở trên, chỉ về phía cửa)'); assert.equal(svg.cung, 2, 'hình 2 cánh');
+    assert.match(await page.textContent('[data-ui="nhin"]'), /đứng NGOÀI \(▲ dưới hình\), nhìn vào phía TRONG/);
+    assert.equal(await page.locator('[data-c="go.phia_trong"]').count(), 0, 'chưa chọn vào / ra: chưa hỏi phía trong');
+    await page.click('[data-act="cua-mo"][data-mo="vao"]');
+    r = await rec(page); assert.deepEqual([r.cua.go.ban_le, r.cua.go.mo], [null, 'vao']);
+    await page.waitForSelector('[data-c="go.phia_trong"]');
+    assert.equal(await page.getAttribute('[data-c="go.phia_trong"]', 'placeholder'), 'Phòng ngủ 2', 'gợi ý theo Vị trí');
+    await page.fill('[data-c="go.phia_trong"]', 'Phòng ngủ 2');
+    await kiemMan(page, 'chiều mở 2 cánh');
+    await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="me_con"]');
+    r = await rec(page); assert.deepEqual([r.cua.go.ban_le, r.cua.go.mo], [null, null], 'đổi kiểu: bỏ chiều mở của kiểu cũ');
+    assert.deepEqual(await page.$$eval('.mo-o[data-act="cua-mo"] small', ds => ds.map(x => x.textContent)), ['Cánh mẹ trái · mở VÀO', 'Cánh mẹ phải · mở VÀO', 'Cánh mẹ trái · mở RA', 'Cánh mẹ phải · mở RA']);
+    await page.click('[data-act="cua-mo"][data-ben="phai"][data-mo="ra"]');
+    r = await rec(page); assert.deepEqual([r.cua.go.ban_le, r.cua.go.mo, r.cua.go.phia_trong], ['phai', 'ra', 'Phòng ngủ 2']);
+    await page.click('[data-act="cua-chon"][data-c="go.op_chi"][data-v="1"]');
+    await page.click('[data-act="cua-chon"][data-c="go.san"][data-v="da_lat"]');
+    await kiemMan(page, 'chiều mở mẹ con');
+    await page.locator('[data-cb~="go.mo"]').screenshot({ path: path.join(FIN, 'final-chieu-mo.png') });
+    ghi('R2-2 / R2-3: ▲ chỉ lên + TRONG / NGOÀI trong hình, ô "Phía TRONG là"; 2 cánh đều chỉ vào / ra; mẹ con hỏi cánh mẹ bên nào');
+    // R2-4: đổi sang Khác → bỏ chiều mở
+    await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="khac"]');
+    r = await rec(page); assert.deepEqual([r.cua.go.ban_le, r.cua.go.mo], [null, null]);
+    await page.click('[data-act="cua-chon"][data-c="go.kieu"][data-v="me_con"]');
+    await page.click('[data-act="cua-mo"][data-ben="phai"][data-mo="ra"]');
+    await page.fill('[data-c="rong.2"]', '790');      // lệch 30: đỏ — màn có cảnh báo
+    await sl(200); await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: path.join(FIN, 'final-sua-cua.png'), fullPage: true });
+    await page.fill('[data-c="rong.2"]', '812');
+    ghi('R2-4: đổi kiểu cửa gỗ bỏ bản lề / chiều mở cũ');
+
+    // nhôm: quay bản lề phải mở ra → đổi Mở hất: "Hất ra ngoài" không sáng sẵn, bấm là chọn (không bỏ chọn)
+    await page.click('[aria-label="Về công trình"]'); await page.waitForSelector('[data-ui="ds-cua"] [data-cua]');
+    await page.click('[data-act="cua-them"]'); await page.click('[data-act="cua-nhom"][data-nhom="nhom"]'); await page.waitForSelector('[data-c="nhom_ct.he"]');
+    await page.click('[data-act="cua-chon"][data-c="nhom_ct.kieu_mo"][data-v="quay"]');
+    const sv2 = await page.$eval('.mo-o[data-act="cua-mo"] svg', s => [...s.querySelectorAll('text')].map(t => t.textContent));
+    assert.deepEqual(sv2, ['NGOÀI NHÀ', 'TRONG NHÀ'], 'cửa nhôm: đứng trong nhà nhìn ra');
+    assert.match(await page.textContent('[data-ui="nhin"]'), /đứng TRONG NHÀ/);
+    await page.click('[data-act="cua-mo"][data-kh="nhom_ct"][data-ben="phai"][data-mo="ra"]');
+    await page.click('[data-act="cua-chon"][data-c="nhom_ct.kieu_mo"][data-v="hat"]');
+    assert.equal(await page.getAttribute('[data-act="cua-chon"][data-c="nhom_ct.mo"][data-v="ra"]', 'aria-pressed'), 'false');
+    await page.click('[data-act="cua-chon"][data-c="nhom_ct.mo"][data-v="ra"]');
+    r = await rec(page); assert.deepEqual([r.cua.nhom_ct.ban_le, r.cua.nhom_ct.mo], [null, 'ra']);
+    await page.click('[data-act="cua-chon"][data-c="nhom_ct.kieu_mo"][data-v="lua"]');
+    r = await rec(page); assert.deepEqual([r.cua.nhom_ct.ban_le, r.cua.nhom_ct.mo], [null, null]);
+    // R2-1 nhôm: Enter từ Cao phải sang Dày tường
+    await page.focus('[data-c="cao.2"]'); await page.keyboard.type('1200'); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.c), 'nhom_ct.day_tuong.0');
+    ghi('R2-4 nhôm: quay → hất / lùa bỏ bản lề + chiều mở cũ; hình ghi NGOÀI NHÀ / TRONG NHÀ');
+
+    // kính: chữ U đo đủ 3 mặt → đổi Góc L: mặt 3 còn, LỖI ĐỎ, nút Bỏ mặt 3 (bấm hai lần); thứ tự ô chiều mở như mọi nhóm (VÀO trước)
+    await page.click('[aria-label="Về công trình"]'); await page.waitForSelector('[data-ui="ds-cua"] [data-cua]');
+    await page.click('[data-act="cua-them"]'); await page.click('[data-act="cua-nhom"][data-nhom="kinh"]'); await page.waitForSelector('[data-c="kinh.vat"]');
+    await page.click('[data-act="cua-chon"][data-c="kinh.dang"][data-v="chu_u"]');
+    await cho(async () => (await page.locator('.mat-kinh').count()) === 3, 2000, 'chữ U = 3 mặt');
+    for (let m = 0; m < 3; m++) for (let i = 0; i < 3; i++) { await page.fill(`[data-c="kinh.mat.${m}.rong.${i}"]`, String(900 + m * 100)); await page.fill(`[data-c="kinh.mat.${m}.cao.${i}"]`, '2000'); }
+    await page.click('[data-act="cua-chon"][data-c="kinh.dang"][data-v="goc_l"]');
+    assert.equal(await page.locator('.mat-kinh').count(), 3, 'mặt đã đo không tự mất');
+    await cho(async () => /cần 2 mặt, đang có 3/.test(await page.textContent('[data-cb~="kinh.mat"] .cb')), 2000, 'đỏ số mặt');
+    assert.equal(await page.getAttribute('[data-cb~="kinh.mat"] .cb .msg', 'data-cb-muc'), 'do');
+    assert.equal(await page.locator('[data-act="cua-bo-mat"]').count(), 1);
+    await page.click('[data-c="xong"]'); assert.equal(await page.isChecked('[data-c="xong"]'), false, 'còn mặt thừa: không cho Đo xong');
+    await page.click('[data-act="cua-bo-mat"]'); assert.match(await page.textContent('[data-act="cua-bo-mat"]'), /Bấm lần nữa/);
+    assert.equal((await rec(page)).cua.kinh.mat.length, 3);
+    await page.click('[data-act="cua-bo-mat"]');
+    await cho(async () => (await page.locator('.mat-kinh').count()) === 2, 2000, 'bỏ mặt 3');
+    r = await rec(page); assert.deepEqual(r.cua.kinh.mat.map(m => m.rong[0]), [900, 1000]);
+    assert.doesNotMatch(await page.textContent('[data-ui="cua-than"]'), /đang có 3/);
+    await page.click('[data-act="cua-chon"][data-c="kinh.cua.kieu"][data-v="quay"]');
+    assert.deepEqual(await page.$$eval('.mo-o[data-act="cua-mo"]', ds => ds.map(b => b.dataset.mo)), ['vao', 'vao', 'ra', 'ra'], 'kính: VÀO trước như gỗ / nhôm');
+    assert.deepEqual(await page.$eval('.mo-o[data-act="cua-mo"] svg', s => [...s.querySelectorAll('text')].map(t => t.textContent)), ['KHU TẮM', 'NGOÀI']);
+    await page.click('[data-act="cua-mo"][data-kh="kinh.cua"][data-ben="trai"][data-mo="ra"]');
+    await page.click('[data-act="cua-chon"][data-c="kinh.cua.kieu"][data-v="lua"]');
+    r = await rec(page); assert.deepEqual([r.cua.kinh.cua.mo, r.cua.kinh.cua.ban_le_ben], [null, null]);
+    // R2 (kính dày): bấm lại 10 mm = để trống → máy chủ giữ trống
+    await page.click('[data-act="cua-chon"][data-c="kinh.kinh_day"][data-v="10"]');
+    await page.click('[data-act="cua-chon"][data-c="kinh.kinh_loai"][data-v="mo"]');
+    await page.fill('[data-c="kinh.doc"]', 'về góc trong bên phải');
+    const kId = (await rec(page)).id;
+    await page.locator('[data-c="kinh.doc"]').blur(); await sl(300); await hangRong(page);
+    const kSv = await Q.goi('GET', '/api/cua/' + kId); assert.equal(kSv.j.cua.kinh.kinh_day, null);
+    ghi('VS1 / R2-8: đổi dạng ít mặt → đỏ + Bỏ mặt (hai lần); kính VÀO trước; VS2: kính dày trống giữ trống trên máy chủ');
+
+    // danh sách + phiếu A4 (ảnh cuối)
+    await page.click('[aria-label="Về công trình"]'); await page.waitForSelector('[data-ui="ds-cua"] [data-cua]');
+    await kiemMan(page, 'danh sách cửa (vòng soát)');
+    await page.locator('[data-ui="ds-cua"]').screenshot({ path: path.join(FIN, 'final-ds-cua.png') });
+    const pp = await ctx.newPage(); await pp.setViewportSize({ width: 1123, height: 794 });
+    await pp.goto(M.goc + `/api/cong-trinh/${ctId}/phieu-cua?nhom=go,nhom,kinh&dang=html`);
+    const pt = await pp.textContent('body');
+    assert.match(pt, /Vách kính tắm — 2 mục/); assert.match(pt, /sàn dốc về góc trong bên phải/); assert.doesNotMatch(pt, /về về|undefined|sát mặt trong/);
+    assert.match(pt, /cánh mẹ bên phải; mở ra, phía trong là Phòng ngủ 2/); assert.match(pt, /kính cường lực mờ/);
+    // không bẻ vụn: Ký hiệu / SL một dòng, không tràn ô
+    const vo = await pp.$$eval('td.c-ky_hieu, td.c-sl', ds => ds.filter(d => getComputedStyle(d).whiteSpace !== 'nowrap' || d.scrollWidth > d.clientWidth + 1).map(d => d.textContent));
+    assert.deepEqual(vo, [], 'ô Ký hiệu / SL bị tràn / bẻ dòng');
+    await pp.screenshot({ path: path.join(FIN, 'final-phieu.png'), fullPage: true });
+    await pp.pdf({ path: path.join(FIN, 'final-phieu.pdf'), format: 'A4', landscape: true, printBackground: true }).catch(() => null);
+    await pp.close();
+    ghi('phiếu A4: cột cố định, số đặt hàng đậm, đếm theo mục, chữ đúng (cửa lùa / kính mờ / sàn dốc)');
+
+    // VS4: IndexedDB — tab khác còn mở bản 1 → trang báo đóng tab kia (không đứng mãi); đóng tab kia → trang chạy tiếp
+    {
+      const c3 = await browser.newContext({ viewport: { width: W, height: 844 } });
+      const cu = await c3.newPage(); await cu.goto(M.goc + '/cua.js');
+      await cu.evaluate(() => new Promise((ok, hong) => { const r = indexedDB.open('mndo', 1); r.onupgradeneeded = () => r.result.createObjectStore('meta', { keyPath: 'k' }); r.onsuccess = () => { window.__db = r.result; ok(); }; r.onerror = () => hong(r.error); }));
+      const moi = await c3.newPage(); moi.on('pageerror', e => loiTrang.push(String(e)));
+      await moi.goto(M.goc + '/');
+      await moi.waitForSelector('[data-ui="db-chan"]', { timeout: 5000 });
+      assert.match(await moi.textContent('[data-ui="db-chan"]'), /đóng các tab/);
+      await cu.evaluate(() => window.__db.close());
+      await moi.waitForSelector('input[name="ten"]', { timeout: 5000 });
+      assert.equal(await moi.evaluate(() => typeof window.MNDO.DB.db.onversionchange), 'function', 'lần nâng sau: tab này tự đóng CSDL + tải lại');
+      await c3.close();
+      ghi('VS4: nâng IndexedDB bị tab cũ chặn → báo đóng tab kia, đóng xong chạy tiếp; có onversionchange cho lần nâng sau');
+    }
 
     await ctx.close();
     assert.deepEqual(loiTrang, [], 'lỗi trong trang');

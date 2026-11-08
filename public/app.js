@@ -25,7 +25,9 @@
       return new Promise((ok, hong) => {
         const r = indexedDB.open('mndo', 2);      // bản 2 (0.3.0): thêm kho 'cua' — nâng chỉ THÊM kho, nháp cũ giữ nguyên
         r.onupgradeneeded = () => { const d = r.result; for (const [n, k] of [['meta', 'k'], ['ct', 'id'], ['phong', 'id'], ['anh', 'id'], ['hang', 'k'], ['cua', 'id']]) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
-        r.onsuccess = () => { DB.db = r.result; ok(); }; r.onerror = () => hong(r.error);
+        // tab / cửa sổ khác còn mở bản cũ (bản 1): lần nâng chờ nó đóng — không báo thì trang đứng mãi ở bước tải
+        r.onblocked = () => { app.innerHTML = '<div class="msg vang" data-ui="db-chan">Đang có tab / cửa sổ khác của trang Đo mở bản cũ — đóng các tab / cửa sổ đó (cả Safari và app đã cài) rồi mở lại trang này. Nháp trong máy vẫn giữ nguyên.</div>'; };
+        r.onsuccess = () => { DB.db = r.result; DB.db.onversionchange = () => { DB.db.close(); location.reload(); }; ok(); }; r.onerror = () => hong(r.error);
       });
     },
     lam(store, mode, fn) {
@@ -1375,14 +1377,14 @@ ${ds.length ? `<div class="o-so-lien"><small>${K.oGoiY && K.oLien === K.oGoiY ? 
   }
   // trần riêng của vài ô (lib/cua.js soát: cốt sàn / tường nghiêng ≤ 1000, kính ≤ 100) — gõ quá thì đỏ ở ô, gửi đi là ô trống (máy chủ từ chối CẢ mục vì một ô)
   const CUA_MAX = { 'go.cot_san': 1000, 'kinh.nghieng.trai': 1000, 'kinh.nghieng.phai': 1000, 'nhom_ct.kinh_day': 100, 'kinh.kinh_day': 100 };
-  const CUA_CHU = { ky_hieu: 12, vi_tri: 80, chat_lieu: 80, mau: 60, phu_kien: 200, ghi_chu: 500, 'go.kieu_khac': 40, 'nhom_ct.he': 40, 'nhom_ct.tang_ghi': 80, 'kinh.doc': 80, 'kinh.vat': 300 };
+  const CUA_CHU = { ky_hieu: 12, vi_tri: 80, chat_lieu: 80, mau: 60, phu_kien: 200, ghi_chu: 500, 'go.kieu_khac': 40, 'go.phia_trong': 40, 'nhom_ct.he': 40, 'nhom_ct.tang_ghi': 80, 'kinh.doc': 80, 'kinh.vat': 300 };
   const KY_RE = /^[\p{L}\p{N} ._/#-]{1,12}$/u;
   const NHOM_ICON = { go: '🚪', nhom: '🪟', kinh: '🚿' };
   const NHOM_GIAI = { go: 'cửa phòng ngủ, WC, cửa chính gỗ — khuôn, ốp chỉ', nhom: 'cửa đi / cửa sổ / vách nhôm kính (Xingfa, PMI…)', kinh: 'vách tắm thẳng / góc L / chữ U / cửa lùa' };
   const MAT_CAN = { thang: 1, goc_l: 2, chu_u: 3, lua: 1 };
   function cuaMoi(nhom, ky) {
     const c = { nhom, ky_hieu: ky, vi_tri: '', so_luong: 1, rong: [null, null, null], cao: [null, null, null], cheo: [null, null], chat_lieu: '', mau: '', phu_kien: '', ghi_chu: '', xong: false };
-    if (nhom === 'go') c.go = { day_tuong: [null, null], san: null, cot_san: null, kieu: null, kieu_khac: '', ban_le: null, mo: null, lua: null, op_chi: null };
+    if (nhom === 'go') c.go = { day_tuong: [null, null], san: null, cot_san: null, kieu: null, kieu_khac: '', ban_le: null, mo: null, lua: null, phia_trong: '', op_chi: null };
     else if (nhom === 'nhom') c.nhom_ct = { loai: null, be: null, day_tuong: [null, null], lap: null, he: '', kieu_mo: null, so_canh: null, ban_le: null, mo: null, kinh_day: null, kinh_loai: null, fix: null, fix_tren: null, fix_duoi: null, tang_cao: false, tang_ghi: '' };
     else c.kinh = { dang: null, mat: [{ rong: [null, null, null], cao: [null, null, null] }], nghieng: { trai: null, phai: null }, bac: { co: null, cao: null, rong: null }, doc: '', cua: { kieu: null, rong: null, mo: null, ban_le_ben: null, ban_le: null }, kinh_day: 10, kinh_loai: null, pk_mau: null, vat: '' };
     return c;
@@ -1538,27 +1540,48 @@ ${C.NHOM.map(n => `<p><button class="to nhom-chon" data-act="cua-nhom" data-ct="
     return `<fieldset class="ba" data-cb="${d}"><legend>${esc(ten)} <small>(mm, lọt lòng)</small></legend><div class="ba-o">${diem.map((nh, i) => oSo(`${d}.${i}`, nh, { aria: `${ten} ${nh.toLowerCase()}` })).join('')}</div>
 <div class="ba-min" data-min="${min || d}"></div><div class="cb"></div></fieldset>`;
   }
-  /** Hình mặt bằng nhỏ chiều mở (đứng NGOÀI = phía dưới hình, nhìn vào): tường xám, bản lề chấm, cánh + cung quét. */
-  function hinhMo(ben, mo) {
-    const hx = ben === 'trai' ? 17 : 47, ox = ben === 'trai' ? 47 : 17, ty = mo === 'vao' ? 10 : 70, sw = (ben === 'trai') === (mo === 'vao') ? 1 : 0;
-    return `<svg viewBox="0 0 64 80" width="56" height="70" aria-hidden="true" class="hinh-mo"><rect x="0" y="0" width="64" height="40" class="trong"/><rect x="0" y="37" width="17" height="6" class="tuong-h"/><rect x="47" y="37" width="17" height="6" class="tuong-h"/>`
-      + `<path d="M${hx} ${ty} A30 30 0 0 ${sw} ${ox} 40" class="cung"/><line x1="${hx}" y1="40" x2="${hx}" y2="${ty}" class="canh"/><circle cx="${hx}" cy="40" r="3.5" class="ban-le"/><path d="M32 79 l-4 -6 h8 z" class="mat"/></svg>`;
+  /* Hình mặt bằng nhỏ chiều mở — nhìn từ trên xuống, người đo đứng ở PHÍA DƯỚI hình (▲ chỉ lên, về phía cửa), chữ hai phía ghi ngay
+   * trong hình: cửa gỗ TRONG / NGOÀI (phía trong = phòng cửa mở vào, ghi ở ô "Phía trong là"), cửa nhôm đứng TRONG NHÀ nhìn ra (thợ đo
+   * từ trong phòng), vách kính đứng NGOÀI khu tắm nhìn vào. Cùng thứ tự ô mọi nhóm: hàng trên mở VÀO, hàng dưới mở RA. */
+  const PHIA = { go: ['TRONG', 'NGOÀI'], nhom: ['NGOÀI NHÀ', 'TRONG NHÀ'], kinh: ['KHU TẮM', 'NGOÀI'] };
+  const NHIN_GOI = { go: 'bạn đứng NGOÀI (▲ dưới hình), nhìn vào phía TRONG', nhom: 'bạn đứng TRONG NHÀ (▲ dưới hình), nhìn ra ngoài', kinh: 'bạn đứng NGOÀI khu tắm (▲ dưới hình), nhìn vào' };
+  const MO_CHU = { go: { vao: 'mở VÀO', ra: 'mở RA' }, nhom: { vao: 'mở VÀO nhà', ra: 'mở RA ngoài' }, kinh: { vao: 'mở VÀO', ra: 'mở RA' } };
+  function khungMo(nhom, giua) {
+    const [tren, duoi] = PHIA[nhom] || PHIA.go;
+    return `<svg viewBox="0 0 64 100" width="56" height="88" aria-hidden="true" class="hinh-mo"><rect x="0" y="10" width="64" height="40" class="trong"/><text x="32" y="8" class="nhan">${tren}</text>`
+      + `<rect x="0" y="47" width="17" height="6" class="tuong-h"/><rect x="47" y="47" width="17" height="6" class="tuong-h"/>${giua}<path d="M32 84 l-4 6 h8 z" class="mat"/><text x="32" y="99" class="nhan">${duoi}</text></svg>`;
   }
-  function hinhLua(ben) {
+  /** Một cánh bản lề ở hx (đầu kia ox), dài |ox − hx|, mở vào (lên) / ra (xuống). */
+  function la(hx, ox, mo) {
+    const L = Math.abs(ox - hx), ty = mo === 'vao' ? 50 - L : 50 + L, sw = (hx < ox) === (mo === 'vao') ? 1 : 0;
+    return `<path d="M${hx} ${ty} A${L} ${L} 0 0 ${sw} ${ox} 50" class="cung"/><line x1="${hx}" y1="50" x2="${hx}" y2="${ty}" class="canh"/><circle cx="${hx}" cy="50" r="3.5" class="ban-le"/>`;
+  }
+  const hinhMo = (nhom, ben, mo) => khungMo(nhom, ben === 'trai' ? la(17, 47, mo) : la(47, 17, mo));
+  const hinhHai = (nhom, mo) => khungMo(nhom, la(17, 32, mo) + la(47, 32, mo));
+  const hinhMeCon = (nhom, ben, mo) => khungMo(nhom, ben === 'trai' ? la(17, 37, mo) + la(47, 37, mo) : la(47, 27, mo) + la(17, 27, mo));
+  function hinhLua(nhom, ben) {
     const x0 = ben === 'trai' ? 4 : 30, ax = ben === 'trai' ? 12 : 52, bx = ben === 'trai' ? 34 : 30;
-    return `<svg viewBox="0 0 64 80" width="56" height="70" aria-hidden="true" class="hinh-mo"><rect x="0" y="0" width="64" height="40" class="trong"/><rect x="0" y="37" width="17" height="6" class="tuong-h"/><rect x="47" y="37" width="17" height="6" class="tuong-h"/>`
-      + `<rect x="${x0}" y="30" width="30" height="5" class="canh-lua"/><line x1="${bx}" y1="22" x2="${ax}" y2="22" class="canh"/><path d="M${ax} 22 l${ben === 'trai' ? 6 : -6} -5 v10 z" class="mui"/><path d="M32 79 l-4 -6 h8 z" class="mat"/></svg>`;
+    return khungMo(nhom, `<rect x="${x0}" y="40" width="30" height="5" class="canh-lua"/><line x1="${bx}" y1="32" x2="${ax}" y2="32" class="canh"/><path d="M${ax} 32 l${ben === 'trai' ? 6 : -6} -5 v10 z" class="mui"/>`);
   }
-  /** Chiều mở cửa quay: 4 ô bấm (bản lề trái / phải × mở vào / ra). kh = khối ('go', 'nhom_ct', 'kinh.cua'); khBen = khoá bên bản lề. */
-  function chonMo(kh, khBen, moDs) {
-    const G2 = layD(S.rec.cua, kh) || {};
-    const o = [];
-    for (const mo of moDs) for (const ben of ['trai', 'phai']) o.push(`<button type="button" class="mo-o" data-act="cua-mo" data-kh="${kh}" data-kben="${khBen}" data-ben="${ben}" data-mo="${mo}" aria-pressed="${G2[khBen] === ben && G2.mo === mo}" aria-label="Bản lề ${ben === 'trai' ? 'trái' : 'phải'}, mở ${mo}">${hinhMo(ben, mo)}<small>${ben === 'trai' ? 'Bản lề trái' : 'Bản lề phải'} · mở ${mo === 'vao' ? 'VÀO' : 'RA'}</small></button>`);
-    return `<div class="mo-luoi">${o.join('')}</div><p class="nhat goi"><small>Hình nhìn từ trên xuống — bạn đứng NGOÀI (▲ phía dưới hình), nhìn vào.</small></p>`;
+  const goiNhin = (nhom, them) => `<p class="nhat goi" data-ui="nhin"><small>Hình nhìn từ trên xuống — ${NHIN_GOI[nhom]}${them || ''}.</small></p>`;
+  /** Chiều mở cửa quay: 4 ô bấm (bản lề trái / phải × mở vào / ra). kh = khối ('go', 'nhom_ct', 'kinh.cua'); khBen = khoá bên bản lề.
+   * kieu 'hai_canh': chỉ hỏi vào / ra (2 ô, hình 2 cánh); 'me_con': khBen = bên CÁNH MẸ. */
+  function chonMo(kh, khBen, kieu) {
+    const G2 = layD(S.rec.cua, kh) || {}, nhom = S.rec.cua.nhom, MC = MO_CHU[nhom], o = [];
+    if (kieu === 'hai_canh') {
+      for (const mo of ['vao', 'ra']) o.push(`<button type="button" class="mo-o" data-act="cua-mo" data-kh="${kh}" data-kben="" data-mo="${mo}" aria-pressed="${G2.mo === mo}" aria-label="2 cánh ${MC[mo]}">${hinhHai(nhom, mo)}<small>2 cánh · ${MC[mo]}</small></button>`);
+      return `<div class="mo-luoi hai">${o.join('')}</div>${goiNhin(nhom)}`;
+    }
+    const me = kieu === 'me_con';
+    for (const mo of ['vao', 'ra']) for (const ben of ['trai', 'phai']) {
+      const tb = ben === 'trai' ? 'trái' : 'phải', nh = me ? `Cánh mẹ ${tb}` : `Bản lề ${tb}`;
+      o.push(`<button type="button" class="mo-o" data-act="cua-mo" data-kh="${kh}" data-kben="${khBen}" data-ben="${ben}" data-mo="${mo}" aria-pressed="${G2[khBen] === ben && G2.mo === mo}" aria-label="${nh}, ${MC[mo]}">${me ? hinhMeCon(nhom, ben, mo) : hinhMo(nhom, ben, mo)}<small>${nh} · ${MC[mo]}</small></button>`);
+    }
+    return `<div class="mo-luoi">${o.join('')}</div>${goiNhin(nhom)}`;
   }
   function chonLua(d) {
-    const cu = layD(S.rec.cua, d);
-    return `<div class="mo-luoi hai">${['trai', 'phai'].map(b => `<button type="button" class="mo-o" data-act="cua-chon" data-c="${d}" data-v="${b}" aria-pressed="${cu === b}" aria-label="Cánh chạy về bên ${b === 'trai' ? 'trái' : 'phải'}">${hinhLua(b)}<small>Lùa về ${b === 'trai' ? 'TRÁI' : 'PHẢI'}</small></button>`).join('')}</div><p class="nhat goi"><small>Đứng NGOÀI nhìn vào — cánh chạy về phía nào khi mở.</small></p>`;
+    const cu = layD(S.rec.cua, d), nhom = S.rec.cua.nhom;
+    return `<div class="mo-luoi hai">${['trai', 'phai'].map(b => `<button type="button" class="mo-o" data-act="cua-chon" data-c="${d}" data-v="${b}" aria-pressed="${cu === b}" aria-label="Cánh chạy về bên ${b === 'trai' ? 'trái' : 'phải'}">${hinhLua(nhom, b)}<small>Lùa về ${b === 'trai' ? 'TRÁI' : 'PHẢI'}</small></button>`).join('')}</div>${goiNhin(nhom, ' — cánh chạy về phía nào khi mở')}`;
   }
   const NHOM_DAY = { go: 'go', nhom: 'nhom_ct' };
   function thanGo() {
@@ -1568,7 +1591,7 @@ ${C.NHOM.map(n => `<p><button class="to nhom-chon" data-act="cua-nhom" data-ct="
 ${G2.san === 'chua_lat' ? oSo('go.cot_san', 'Sàn hoàn thiện sẽ cao thêm (mm)', { goi: 'gạch + vữa / sàn gỗ — cao đặt hàng trừ phần này' }) : ''}<div class="cb"></div></fieldset>
 <fieldset data-cb="go.kieu go.kieu_khac"><legend>Kiểu cửa</legend>${chips('go.kieu', [['mot_canh', '1 cánh'], ['hai_canh', '2 cánh đều'], ['me_con', 'Mẹ con'], ['lua', 'Lùa'], ['xep', 'Xếp'], ['khac', 'Khác']])}
 ${G2.kieu === 'khac' ? oChu('go.kieu_khac', 'Kiểu khác', { ph: 'vd cửa vòm' }) : ''}<div class="cb"></div></fieldset>
-<fieldset data-cb="go.mo go.ban_le go.lua"><legend>Chiều mở</legend>${G2.kieu === 'lua' || G2.kieu === 'xep' ? chonLua('go.lua') : G2.kieu === 'khac' ? '<p class="nhat"><small>Kiểu khác: ghi chiều mở ở ghi chú.</small></p>' : quay ? chonMo('go', 'ban_le', ['vao', 'ra']) : ''}<div class="cb"></div></fieldset>
+<fieldset data-cb="go.mo go.ban_le go.lua go.phia_trong"><legend>Chiều mở</legend>${G2.kieu === 'lua' || G2.kieu === 'xep' ? chonLua('go.lua') : G2.kieu === 'khac' ? '<p class="nhat"><small>Kiểu khác: ghi chiều mở ở ghi chú.</small></p>' : quay ? chonMo('go', 'ban_le', G2.kieu) + (G2.mo ? oChu('go.phia_trong', 'Phía TRONG là (phòng cửa mở vào)', { list: 'goi-y-phia', ph: S.rec.cua.vi_tri || 'vd phòng ngủ master' }) + `<datalist id="goi-y-phia">${Array.from(new Set([S.rec.cua.vi_tri].concat(GOI_Y_TEN).filter(Boolean))).map(t => `<option value="${esc(t)}">`).join('')}</datalist>` : '') : ''}<div class="cb"></div></fieldset>
 <fieldset data-cb="go.op_chi"><legend>Ốp chỉ</legend>${chips('go.op_chi', [[1, '1 mặt'], [2, '2 mặt']], 'so')}<div class="cb"></div></fieldset>`;
   }
   function thanNhom() {
@@ -1580,7 +1603,7 @@ ${chips('nhom_ct.lap', [['trong', 'Sát mặt trong'], ['giua', 'Giữa tường
 <fieldset data-cb="nhom_ct.he"><legend>Hệ nhôm</legend>${oChu('nhom_ct.he', 'Hệ nhôm', { list: 'goi-y-he', ph: 'Xingfa, PMI, Việt Pháp…' })}<datalist id="goi-y-he">${C.HE_NHOM.map(h => `<option value="${esc(h)}">`).join('')}</datalist><div class="cb"></div></fieldset>
 <fieldset data-cb="nhom_ct.kieu_mo nhom_ct.mo nhom_ct.ban_le nhom_ct.so_canh"><legend>Kiểu mở</legend>${chips('nhom_ct.kieu_mo', [['quay', 'Mở quay'], ['hat', 'Mở hất'], ['lua', 'Lùa'], ['xep', 'Xếp trượt'], ['co_dinh', 'Cố định']])}
 ${oSo('nhom_ct.so_canh', 'Số cánh', { nguyen: true, lop: 'hep' })}
-${G2.kieu_mo === 'quay' ? chonMo('nhom_ct', 'ban_le', ['vao', 'ra']) : G2.kieu_mo === 'hat' ? `<label>Mở hất</label>${chips('nhom_ct.mo', [['ra', 'Hất ra ngoài'], ['vao', 'Hất vào trong']])}` : ''}<div class="cb"></div></fieldset>
+${G2.kieu_mo === 'quay' ? chonMo('nhom_ct', 'ban_le') : G2.kieu_mo === 'hat' ? `<label>Mở hất</label>${chips('nhom_ct.mo', [['ra', 'Hất ra ngoài'], ['vao', 'Hất vào trong']])}` : ''}<div class="cb"></div></fieldset>
 <fieldset data-cb="nhom_ct.kinh nhom_ct.kinh_day nhom_ct.kinh_loai"><legend>Kính</legend><div class="hai-o">${oSo('nhom_ct.kinh_day', 'Kính dày (mm)', { ph: '8' })}<div class="goi-y-o">${G2.kinh_day === 8 && G2.kinh_loai === 'cuong_luc' ? '' : '<button type="button" data-act="cua-kinh8">8 mm cường lực</button>'}</div></div>
 ${chips('nhom_ct.kinh_loai', [['thuong', 'Thường'], ['cuong_luc', 'Cường lực'], ['dan', 'Dán an toàn'], ['hop', 'Kính hộp']])}<div class="cb"></div></fieldset>
 <fieldset data-cb="nhom_ct.fix nhom_ct.fix_tren nhom_ct.fix_duoi"><legend>Ô fix (kính cố định)</legend>${chips('nhom_ct.fix', [['khong', 'Không'], ['tren', 'Fix trên'], ['duoi', 'Fix dưới'], ['ca_hai', 'Trên + dưới']])}
@@ -1592,13 +1615,14 @@ ${G2.tang_cao ? oChu('nhom_ct.tang_ghi', 'Ghi chú lắp', { ph: 'vd tầng 5, m
     const G2 = S.rec.cua.kinh || {}, mat = G2.mat || [], Cu = G2.cua || {};
     return `<fieldset data-cb="kinh.dang kinh.mat"><legend>Dạng vách</legend>${chips('kinh.dang', [['thang', 'Thẳng 1 mặt'], ['goc_l', 'Góc L (2 mặt)'], ['chu_u', 'Chữ U (3 mặt)'], ['lua', 'Cửa lùa']])}<div class="cb"></div></fieldset>
 ${mat.map((m, i) => `<div class="mat-kinh" data-mat="${i}"><h2>Mặt ${i + 1}${mat.length > 1 ? ` <small class="nhat">/ ${mat.length}</small>` : ''}</h2>
-${baDiem(`kinh.mat.${i}.rong`, `Mặt ${i + 1} — rộng`, ['Trên', 'Giữa', 'Dưới'])}${baDiem(`kinh.mat.${i}.cao`, `Mặt ${i + 1} — cao`, ['Trái', 'Giữa', 'Phải'])}</div>`).join('')}
+${baDiem(`kinh.mat.${i}.rong`, `Mặt ${i + 1} — rộng`, ['Trên', 'Giữa', 'Dưới'])}${baDiem(`kinh.mat.${i}.cao`, `Mặt ${i + 1} — cao`, ['Trái', 'Giữa', 'Phải'])}
+${G2.dang && i >= MAT_CAN[G2.dang] ? `<p><button class="do" data-act="cua-bo-mat" data-i="${i}">Bỏ mặt ${i + 1} (dạng ${esc(C.TEN_DANG[G2.dang])} chỉ ${MAT_CAN[G2.dang]} mặt)</button></p>` : ''}</div>`).join('')}
 <fieldset data-cb="kinh.nghieng"><legend>Tường hai bên có thẳng đứng? <small>(lệch đỉnh – chân, mm — thả dọi / thước nivô)</small></legend><div class="hai-o">${oSo('kinh.nghieng.trai', 'Tường trái lệch')}${oSo('kinh.nghieng.phai', 'Tường phải lệch')}</div><div class="cb"></div></fieldset>
 <fieldset data-cb="kinh.bac kinh.doc"><legend>Gờ / bậc chắn nước</legend>${chips('kinh.bac.co', [[true, 'Có gờ'], [false, 'Không gờ']], 'bool')}
 ${G2.bac && G2.bac.co ? `<div class="hai-o">${oSo('kinh.bac.cao', 'Gờ cao')}${oSo('kinh.bac.rong', 'Gờ rộng')}</div>` : ''}${oChu('kinh.doc', 'Sàn dốc về đâu', { ph: 'vd về góc trong bên phải (ga thoát)' })}<div class="cb"></div></fieldset>
 <fieldset data-cb="kinh.cua"><legend>Cửa kính</legend>${chips('kinh.cua.kieu', [['quay', 'Mở quay'], ['lua', 'Lùa'], ['khong', 'Không cửa']])}
 ${Cu.kieu && Cu.kieu !== 'khong' ? oSo('kinh.cua.rong', 'Rộng cánh cửa (mm)') : ''}
-${Cu.kieu === 'quay' ? chonMo('kinh.cua', 'ban_le_ben', ['ra', 'vao']) + `<label>Bản lề</label>${chips('kinh.cua.ban_le', [['kinh_tuong', 'Kính – tường'], ['kinh_kinh', 'Kính – kính']])}` : ''}<div class="cb"></div></fieldset>
+${Cu.kieu === 'quay' ? chonMo('kinh.cua', 'ban_le_ben') + `<label>Bản lề</label>${chips('kinh.cua.ban_le', [['kinh_tuong', 'Kính – tường'], ['kinh_kinh', 'Kính – kính']])}` : ''}<div class="cb"></div></fieldset>
 <fieldset data-cb="kinh.kinh_day kinh.kinh_loai kinh.pk_mau"><legend>Kính &amp; phụ kiện</legend><label>Kính dày (cường lực)</label>${chips('kinh.kinh_day', [[8, '8 mm'], [10, '10 mm'], [12, '12 mm']], 'so')}
 ${chips('kinh.kinh_loai', [['trong', 'Kính trong'], ['mo', 'Kính mờ']])}<label>Phụ kiện</label>${chips('kinh.pk_mau', [['inox', 'Inox 304'], ['den', 'Màu đen'], ['vang', 'Màu vàng'], ['khac', 'Khác']])}<div class="cb"></div></fieldset>
 <fieldset data-cb="kinh.vat"><legend>Gần mép kính (để tránh khoan)</legend>${oChu('kinh.vat', 'Vòi sen / ổ điện / ống nước — cách mép bao nhiêu', { dai: true, ph: 'vd vòi sen cách mép trái 250, ống nước âm tường cao 1100' })}<p class="nhat"><small>Chụp thêm ảnh chỗ đó và kẻ số lên ảnh.</small></p><div class="cb"></div></fieldset>`;
@@ -1695,7 +1719,10 @@ ${r.xoa_duoc === false ? '' : `<p><button class="do" data-act="cua-xoa" data-id=
       if (mat.length > n && !mat.slice(n).some(m => m.rong.concat(m.cao).some(x => x !== null))) mat.length = n;
       if (moi === 'lua' && !c.kinh.cua.kieu) c.kinh.cua.kieu = 'lua';
     }
-    if (d === 'kinh.cua.kieu' && moi === 'quay' && !c.kinh.cua.mo) c.kinh.cua.mo = null;
+    // đổi kiểu mở: bỏ các lựa chọn của kiểu cũ (không còn ô trên màn mà vẫn lên phiếu — "lùa · bản lề phải"; "Hất ra ngoài" sáng sẵn theo `mo` cũ)
+    if (d === 'go.kieu' && cu !== moi) { const G2 = c.go; G2.ban_le = null; G2.mo = null; G2.lua = null; }
+    if (d === 'nhom_ct.kieu_mo' && cu !== moi) { const G2 = c.nhom_ct; G2.ban_le = null; G2.mo = null; }
+    if (d === 'kinh.cua.kieu' && cu !== moi) { const K2 = c.kinh.cua; K2.mo = null; K2.ban_le_ben = null; K2.ban_le = null; if (moi === 'khong' || !moi) K2.rong = null; }
     doi(); veCuaThan();
   }
 
@@ -1898,9 +1925,22 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
     'cua-them': b => moThemCua(b.dataset.id),
     'cua-nhom': b => taoCua(b.dataset.ct, b.dataset.nhom),
     'cua-chon': b => chonCua(b),
-    'cua-mo': b => { const c = S.rec.cua, G2 = layD(c, b.dataset.kh); if (!G2) return; const on = G2[b.dataset.kben] === b.dataset.ben && G2.mo === b.dataset.mo; G2[b.dataset.kben] = on ? null : b.dataset.ben; G2.mo = on ? null : b.dataset.mo; doi(); veCuaThan(); },
+    'cua-mo': b => {      // kben trống = 2 cánh đều (chỉ vào / ra, không bản lề trái / phải)
+      const c = S.rec.cua, G2 = layD(c, b.dataset.kh), kb = b.dataset.kben; if (!G2) return;
+      const on = (!kb || G2[kb] === b.dataset.ben) && G2.mo === b.dataset.mo;
+      if (kb) G2[kb] = on ? null : b.dataset.ben; G2.mo = on ? null : b.dataset.mo; doi(); veCuaThan();
+    },
     'cua-kinh8': () => { const G2 = S.rec.cua.nhom_ct; G2.kinh_day = 8; G2.kinh_loai = 'cuong_luc'; delete S.sai['nhom_ct.kinh_day']; doi(); veCuaThan(); },
     'cua-xoa': b => xoaCua(b),
+    'cua-bo-mat': b => {      // mặt thừa sau khi đổi dạng sang ít mặt hơn (đã đo nên không tự bỏ) — bấm hai lần; nét trên ảnh gắn mặt đó thôi gắn
+      const K2 = S.rec.cua.kinh, i = +b.dataset.i; if (!K2 || !K2.mat[i]) return;
+      if (!haiLan(b, `Bấm lần nữa để bỏ mặt ${i + 1} (mất số đã đo)`)) return;
+      K2.mat.splice(i, 1);
+      const re = /^kinh\.mat\.(\d+)\.(.*)$/;
+      for (const a of S.rec.anh) for (const k of a.ke || []) { const m = re.exec(k.lien || ''); if (!m) continue; if (+m[1] === i) delete k.lien; else if (+m[1] > i) k.lien = `kinh.mat.${+m[1] - 1}.${m[2]}`; }
+      for (const d of Object.keys(S.sai)) if (re.test(d)) { delete S.sai[d]; delete S.goC[d]; }
+      doi(); veCuaThan();
+    },
     'cua-phieu': b => moPhieu(b.dataset.id),
     'phieu-nhom': b => { const P = S.phieu, n = b.dataset.v; P.nhom = P.nhom.includes(n) ? P.nhom.filter(x => x !== n) : C.NHOM.filter(x => x === n || P.nhom.includes(x)); veTamPhieu(); },
     'phieu-xem': () => xemPhieu(),
@@ -2001,7 +2041,8 @@ ${m.thu_hoi_luc ? `<small class="loi-o">Đã thu hồi ${esc(ngay(m.thu_hoi_luc)
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.ui === 'hoi-chu') { e.preventDefault(); const b = $('[data-act="hoi-xong"]', lop); if (b) b.click(); }
     if (e.target.dataset && e.target.dataset.ui === 'o-so-nhap') { if (e.key === 'Enter') { e.preventDefault(); ketSo(); } else if (e.key === 'Escape') { e.preventDefault(); dongSo(); veKeCanvas(); } }
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.c && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') {      // Enter: sang ô số kế tiếp (đo 3 điểm liền tay)
-      e.preventDefault(); const ds = $$('[data-ui="cua-than"] input[data-c]:not([type="checkbox"])'), i = ds.indexOf(e.target); if (i >= 0 && i < ds.length - 1) ds[i + 1].focus(); else e.target.blur();
+      e.preventDefault(); const ds = $$('[data-ui="cua-than"] input[data-c]:not([type="checkbox"])').filter(el => el === e.target || (!el.closest('details:not([open])') && el.getClientRects().length)), i = ds.indexOf(e.target);
+      if (i >= 0 && i < ds.length - 1) ds[i + 1].focus(); else e.target.blur();      // bỏ ô đang ẩn (⋯ chéo đóng): focus() vào đó không đi đâu, số sau gõ dính ô cũ
     }
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.f) { e.preventDefault(); const ds = $$('.tam input[data-f]', lop), i = ds.indexOf(e.target); if (i >= 0 && i < ds.length - 1) ds[i + 1].focus(); else xongChiTiet(); }
   });

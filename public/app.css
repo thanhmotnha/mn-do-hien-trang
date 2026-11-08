@@ -35,6 +35,7 @@ input::placeholder { color: var(--nhat); opacity: .8; }
 .ds { list-style: none; margin: 0; padding: 0; }
 .ds > li > button, .ds > li > a { display: block; width: 100%; text-align: left; margin: 8px 0; padding: 12px; border-radius: 14px; background: var(--the); border: 1px solid var(--vien); color: var(--chu); text-decoration: none; }
 .ds b { display: block; font-size: 17px; }
+.ds > li > button > small { display: block; }      /* hai dòng phụ (số đặt hàng / trạng thái) không dính nhau "2 120đang đo" */
 .cham { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--cam); margin-left: 6px; vertical-align: middle; }
 .chip { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px 12px; margin: 3px 4px 3px 0; border-radius: 22px; border: 1px solid var(--vien); background: var(--the); color: var(--chu); font: inherit; }
 .chip[aria-pressed="true"] { background: var(--chinh); color: var(--chinh-chu); border-color: var(--chinh); }
@@ -166,3 +167,4 @@ details.cheo summary { min-height: 44px; padding: 10px 0; color: var(--nhat); }
 .phieu .cong-cu { display: flex; gap: 8px; padding: 8px; }
 .phieu .cong-cu button { flex: 1 1 0; }
 .phieu iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.hinh-mo .nhan { font-size: 8px; font-weight: 700; fill: var(--chu); text-anchor: middle; }

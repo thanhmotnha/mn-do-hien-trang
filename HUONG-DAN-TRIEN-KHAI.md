@@ -146,6 +146,19 @@ docker run --rm -v mndo_data:/d -v ~/sao-luu-mndo:/b alpine sh -c 'rm -rf /d/* &
 docker start mndo-app
 ```
 
+### Quay lại bản cũ sau khi nâng
+
+Bản mới có khi nâng CSDL (vd 0.3.0 thêm phần đo cửa → CSDL bản 3). Ngay trước khi nâng, máy tự chép CSDL cũ vào `/data/sao-luu/do-truoc-ban<N>-<ngày-giờ>.sqlite` (nhật ký container có dòng `nâng CSDL lên bản …`). Bản ứng dụng cũ KHÔNG mở được CSDL bản mới — muốn quay lại thì chạy lại bản cũ VÀ trả tệp đó về chỗ cũ:
+
+```bash
+docker stop mndo-app
+docker run --rm -v mndo_data:/d alpine sh -c 'ls /d/sao-luu/ | grep truoc'      # xem tên tệp
+docker run --rm -v mndo_data:/d alpine sh -c 'cp /d/do.sqlite /d/sao-luu/do-moi-truoc-khi-lui.sqlite && rm -f /d/do.sqlite-wal /d/do.sqlite-shm && cp /d/sao-luu/<tệp>.sqlite /d/do.sqlite'
+# rồi triển khai lại bản cũ (Actions → chạy lại lần triển khai của bản cũ)
+```
+
+Những gì đo SAU lúc nâng (phòng, cửa) không có trong tệp đó — chỉ còn trong `do-moi-truoc-khi-lui.sqlite`.
+
 ## 12. Quên mật khẩu quản lý
 
 Trên máy chủ (thay `quanly` bằng `QUAN_LY_TEN` nếu anh đã đặt):

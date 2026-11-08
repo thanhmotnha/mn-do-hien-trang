@@ -106,7 +106,7 @@ test('tinh: gỗ sàn chưa lát trừ cốt sàn; chiều mở; nhôm / kính c
   t = Cua.tinh(s(cuaKinh({ kinh: Object.assign(cuaKinh().kinh, { cua: { kieu: 'quay', rong: 700, mo: 'vao', ban_le_ben: 'trai', ban_le: 'kinh_tuong' } }) }))); assert.ok(t.canh_bao.some(b => b.truong === 'kinh.cua.mo' && /VÀO/.test(b.loi)));
   t = Cua.tinh(s(cuaKinh({ kinh: Object.assign(cuaKinh().kinh, { kinh_day: 6 }) }))); assert.ok(t.canh_bao.some(b => b.truong === 'kinh.kinh_day'));
   t = Cua.tinh(s(cuaKinh({ kinh: Object.assign(cuaKinh().kinh, { mat: [{ rong: [900, 900, 900], cao: [1500, 1500, 1500] }], dang: 'thang' }) }))); assert.ok(t.canh_bao.some(b => b.truong === 'kinh.mat.0.cao' && /ngoài khoảng/.test(b.loi)));
-  const dk = Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: { nhom: 'kinh', ky_hieu: 'K2' } }).muc.cua; assert.equal(dk.kinh.kinh_day, 10, 'kính mặc định 10');
+  const dk = Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: { nhom: 'kinh', ky_hieu: 'K2' } }).muc.cua; assert.equal(dk.kinh.kinh_day, null, 'kính để trống thì giữ trống (mặc định 10 chỉ ở điện thoại lúc tạo mục)');
 });
 
 test('soát: dữ liệu hỏng → 422 kèm chỗ sai; khối của nhóm khác + khoá lạ bị bỏ; kính bỏ rộng / cao chung', async () => {
@@ -280,7 +280,7 @@ test('phiếu đo cửa: HTML in được (mỗi nhóm một phần, không scri
   assert.ok(!/<script/i.test(html), 'không có thẻ script'); assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;')); assert.ok(html.includes('Nhà &lt;anh&gt; Hùng'));
   assert.equal((html.match(/<section data-nhom=/g) || []).length, 3);
   assert.ok(html.indexOf('>D1<') < html.indexOf('>D2<') && html.indexOf('>D2<') < html.indexOf('>D10<'), 'xếp ký hiệu tự nhiên');
-  assert.ok(html.includes('800 (800 / 820 / 801)')); assert.ok(html.includes('→ đặt 2070')); assert.ok(html.includes('[ĐỎ]'));
+  assert.ok(html.includes('<b>800</b> (800 / 820 / 801)')); assert.ok(html.includes('→ đặt <b>2070</b>')); assert.ok(html.includes('[ĐỎ]'));
   assert.ok(html.includes('K1 · mặt 2')); assert.ok(html.includes('@page{size:A4 landscape'));
   // lọc một nhóm: gửi riêng xưởng nhôm
   const n = (await T.goi('GET', `/api/cong-trinh/${ct}/phieu-cua?nhom=nhom`)).b.toString('utf8');
@@ -326,4 +326,103 @@ test('/cua.js chạy được trên điện thoại (cùng phép tính, CSP self
   const r = await fetch(M.goc + '/cua.js'); assert.equal(r.status, 200); assert.match(r.headers.get('content-type'), /javascript/);
   const vm = require('node:vm'), ctx = { self: {} }; vm.createContext(ctx); vm.runInContext(await r.text(), ctx);
   assert.equal(typeof ctx.self.MNDOCua.tinh, 'function'); assert.equal(ctx.self.MNDOCua.KY_DAU.kinh, 'K');
+});
+
+/* ===================== VÒNG SOÁT 0.3.0 (08/11/2026) — mỗi lỗi một phép thử ===================== */
+const tinhMot = (c, id = 'a') => ({ id, cua: Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: c }).muc.cua, tinh: Cua.tinh(Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: c }).muc.cua) });
+
+test('VS1: vách kính đổi dạng sang ít mặt hơn mà còn mặt đã đo → LỖI ĐỎ; phiếu ghi rõ MẶT THỪA, không đặt', () => {
+  const ba = cuaKinh({ kinh: Object.assign(cuaKinh().kinh, { mat: cuaKinh().kinh.mat.concat([{ rong: [700, 700, 700], cao: [2000, 2000, 2000] }]) }) });      // góc L mà 3 mặt
+  const x = tinhMot(ba);
+  assert.equal(x.tinh.muc, 'do'); assert.ok(x.tinh.canh_bao.some(b => b.muc === 'do' && b.truong === 'kinh.mat' && /góc L \(2 mặt\) cần 2 mặt, đang có 3/.test(b.loi)));
+  const h = Cua.hangPhieu([x]);
+  assert.equal(h.length, 3); assert.ok(!h[0].thua && !h[1].thua); assert.ok(h[2].thua && /^\[ĐỎ\] MẶT THỪA/.test(h[2].canh_bao));
+  const html = Cua.phieuHtml({ ten: 'x' }, [x], ['kinh']); assert.ok(/<tr class="do thua">/.test(html));
+  assert.ok(Cua.phieuCsv([x], ['kinh']).includes('MẶT THỪA'));
+  assert.equal(tinhMot(cuaKinh()).tinh.canh_bao.filter(b => b.truong === 'kinh.mat').length, 0, 'đúng số mặt: không báo');
+});
+
+test('VS2: kính dày để trống → máy chủ giữ null (không tự ghi 10 rồi trả về máy thợ)', async () => {
+  const T3 = await thoMoi(M, await quanLy(M), 'tho9vs', 'Thợ Chín');      // (lần dọn +31 ngày ở trên đã xoá mọi phiên)
+  const ct = idMoi('ct'); await taoCT(T3, ct); const id = idMoi('cu');
+  const c = cuaKinh(); c.kinh = Object.assign({}, c.kinh, { kinh_day: null });
+  assert.equal((await luuCua(T3, id, ct, c)).st, 200);
+  const g = await T3.goi('GET', '/api/cua/' + id); assert.equal(g.j.cua.kinh.kinh_day, null);
+  const html = (await T3.goi('GET', `/api/cong-trinh/${ct}/phieu-cua?nhom=kinh`)).b.toString('utf8');
+  assert.ok(!/kính 10 mm/.test(html) && html.includes('kính cường lực trong'));
+});
+
+test('VS3: đầu phần phiếu đếm theo MỤC (id), không theo ký hiệu — hai mục trùng "D1" là 2 mục', () => {
+  const html = Cua.phieuHtml({ ten: 'x' }, [tinhMot(cuaGo(), 'a'), tinhMot(cuaGo(), 'b'), tinhMot(cuaKinh(), 'c')], ['go', 'kinh']);
+  assert.ok(html.includes('Cửa gỗ thông phòng — 2 mục')); assert.ok(html.includes('Vách kính tắm — 1 mục'), 'kính 2 mặt vẫn là 1 mục');
+});
+
+test('VS5: nâng CSDL có dữ liệu → chép bản cũ ra sao-luu/do-truoc-ban3-*.sqlite trước (quay lại bản 0.2.0 được); CSDL mới thì không chép', () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mndo-csdl3b-'));
+  const d = new DatabaseSync(path.join(dir, 'do.sqlite'));
+  d.exec(csdl.LUOC_DO); d.exec(csdl.NANG[2]); d.exec('PRAGMA user_version=2');
+  d.exec("INSERT INTO tai_khoan (id, ten, ten_hien, vai, mk, tao_luc) VALUES (7, 'tho', 'Thợ', 'tho', 'x', 1)"); d.close();
+  const db = csdl.mo(dir);
+  assert.ok(db.banTruoc && /sao-luu[\\/]do-truoc-ban3-\d{8}-\d{6}\.sqlite$/.test(db.banTruoc), String(db.banTruoc)); db.close();
+  const b = new DatabaseSync(db.banTruoc, { readOnly: true });
+  assert.equal(b.prepare('PRAGMA user_version').get().user_version, 2, 'tệp chép là bản 2 (bản 0.2.0 mở được)');
+  assert.equal(b.prepare('SELECT ten FROM tai_khoan').get().ten, 'tho'); assert.equal(b.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name = 'cua'").get().n, 0); b.close();
+  const db2 = csdl.mo(dir); assert.equal(db2.banTruoc, null, 'mở lại (đã bản 3) không chép nữa'); db2.close();
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mndo-csdl3n-')), db3 = csdl.mo(dir2); assert.equal(db3.banTruoc, null); db3.close();
+  assert.ok(!fs.existsSync(path.join(dir2, 'sao-luu')));
+  // sao lưu hằng ngày không xoá tệp này (giữ 14 bản chỉ áp cho do-YYYY-MM-DD)
+  const db4 = csdl.mo(dir); for (let i = 0; i < 16; i++) SL.saoLuu(db4, dir, () => Date.UTC(2026, 0, 1 + i)); db4.close();
+  assert.ok(fs.existsSync(db.banTruoc));
+  fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dir2, { recursive: true, force: true });
+});
+
+test('VS6 + R2-6 + R2-7: tên dạng vách / loại kính / sàn dốc trên phiếu đúng chữ', () => {
+  const k = o => tinhMot(cuaKinh({ kinh: Object.assign(cuaKinh().kinh, o) }));
+  const lua = k({ dang: 'lua', mat: [cuaKinh().kinh.mat[0]], cua: { kieu: 'lua', rong: 700 } });
+  assert.equal(Cua.moTa(lua.cua).kieu, 'cửa lùa'); assert.ok(!lua.tinh.canh_bao.some(b => /Dạng lùa/.test(b.loi)));
+  const sai = k({ dang: 'lua' }); assert.ok(sai.tinh.canh_bao.some(b => /Dạng cửa lùa cần 1 mặt/.test(b.loi)));
+  assert.match(Cua.moTa(k({ kinh_loai: 'trong' }).cua).them, /kính 10 mm cường lực trong(;|$)/); assert.ok(!/sát mặt trong/.test(Cua.moTa(k({ kinh_loai: 'trong' }).cua).them));
+  assert.match(Cua.moTa(k({ kinh_loai: 'mo' }).cua).them, /kính 10 mm cường lực mờ/); assert.ok(!/undefined/.test(Cua.moTa(k({ kinh_loai: 'mo' }).cua).them));
+  assert.match(Cua.moTa(k({ doc: 'về góc trong bên phải' }).cua).san, /; sàn dốc về góc trong bên phải$/); assert.ok(!/về về/.test(Cua.moTa(k({ doc: 'về góc trong' }).cua).san));
+  assert.match(Cua.moTa(k({ doc: 'góc trái' }).cua).san, /; sàn dốc về góc trái$/);
+});
+
+test('R2-4: phiếu chỉ in chiều mở ĐÚNG với kiểu đang chọn (khoá cũ còn trong dữ liệu không lên phiếu)', () => {
+  const g = o => Cua.moTa(tinhMot(cuaGo({ go: Object.assign(cuaGo().go, o) })).cua);
+  assert.equal(g({ kieu: 'khac', kieu_khac: 'vòm' }).mo, '');
+  assert.equal(g({ kieu: 'lua', lua: 'phai' }).mo, 'lùa về phải (đứng ngoài nhìn vào phía trong)');
+  const n = o => Cua.moTa(tinhMot(cuaNhom({ nhom_ct: Object.assign(cuaNhom().nhom_ct, o) })).cua);
+  assert.equal(n({ kieu_mo: 'hat', ban_le: 'phai', mo: 'ra' }).mo, 'hất ra ngoài');
+  assert.equal(n({ kieu_mo: 'lua', ban_le: 'phai', mo: 'ra' }).mo, '');
+  assert.equal(n({ kieu_mo: 'quay', ban_le: 'phai', mo: 'ra' }).mo, 'bản lề phải; mở ra ngoài (đứng trong nhà nhìn ra)');
+  assert.equal(n({ loai: 'cua_di', be: 900 }).san, '', 'bệ chỉ của cửa sổ');
+  assert.ok(!/dưới/.test(n({ fix: 'tren', fix_tren: 400, fix_duoi: 300 }).kieu));
+  const k = Cua.moTa(tinhMot(cuaKinh({ kinh: Object.assign(cuaKinh().kinh, { cua: { kieu: 'lua', rong: 700, mo: 'ra', ban_le_ben: 'trai', ban_le: 'kinh_tuong' } }) })).cua);
+  assert.equal(k.mo, 'cửa lùa; cánh rộng 700');
+});
+
+test('R2-2 + R2-3: cửa gỗ 2 cánh đều chỉ vào / ra; mẹ con = cánh mẹ bên nào; phía TRONG là phòng nào lên phiếu', () => {
+  const g = o => tinhMot(cuaGo({ go: Object.assign(cuaGo().go, o) }));
+  let x = g({ kieu: 'hai_canh', ban_le: null, mo: 'vao', phia_trong: 'phòng ngủ master' });
+  assert.equal(Cua.moTa(x.cua).mo, '2 cánh mở vào phía phòng ngủ master (đứng ngoài nhìn vào phía trong)');
+  assert.ok(!x.tinh.canh_bao.some(b => b.truong === 'go.mo'), '2 cánh đều không đòi bản lề trái / phải');
+  x = g({ kieu: 'hai_canh', ban_le: 'trai', mo: 'vao' }); assert.ok(!/bản lề/.test(Cua.moTa(x.cua).mo));
+  x = g({ kieu: 'me_con', ban_le: 'phai', mo: 'ra', phia_trong: 'WC' });
+  assert.equal(Cua.moTa(x.cua).mo, 'cánh mẹ bên phải; mở ra, phía trong là WC (đứng ngoài nhìn vào phía trong)');
+  x = g({ kieu: 'me_con', ban_le: null, mo: 'ra' }); assert.ok(x.tinh.canh_bao.some(b => b.truong === 'go.mo' && /cánh mẹ/.test(b.loi)));
+  x = g({ phia_trong: '' }); assert.ok(x.tinh.canh_bao.some(b => b.muc === 'ghi' && b.truong === 'go.phia_trong'));
+  assert.ok(Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: cuaGo({ go: { phia_trong: 'x'.repeat(41) } }) }).loi.some(l => l.truong === 'cua.go.phia_trong'));
+  assert.equal(Cua.soatCua({ ct: 'ctabcdef', rev: 0, cua: cuaGo({ go: { phia_trong: ' WC ' } }) }).muc.cua.go.phia_trong, 'WC');
+  const h = Cua.phieuHtml({ ten: 'x' }, [g({})], ['go']); assert.ok(h.includes('Chiều mở: đứng ngoài nhìn vào phía trong.'));
+  assert.ok(Cua.phieuHtml({ ten: 'x' }, [tinhMot(cuaNhom())], ['nhom']).includes('Chiều mở: đứng trong nhà nhìn ra.'));
+});
+
+test('R2-5: phiếu A4 — cột có bề rộng đặt trước (không bẻ vụn số / chữ), Cảnh báo ≤ 18 %, số đặt hàng in đậm', () => {
+  const html = Cua.phieuHtml({ ten: 'x' }, [tinhMot(cuaGo({ rong: [820, 815, 808] }))], ['go']);
+  assert.ok(html.includes('table-layout:fixed')); assert.ok(!/word-break:break-word/.test(html));
+  const w = [...html.matchAll(/<col class="c-([a-z_]+)" style="width:(\d+)%">/g)].map(m => [m[1], +m[2]]);
+  assert.equal(w.length, 13); assert.equal(w.reduce((s, x) => s + x[1], 0), 100); assert.ok(Object.fromEntries(w).canh_bao <= 18);
+  assert.ok(html.includes('<td class="c-rong"><b>808</b> (820 / 815 / 808)</td>'));
+  assert.match(html, /td\.c-ky_hieu,td\.c-sl,td\.c-xong\{white-space:nowrap\}/);
 });
